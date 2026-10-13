@@ -17,7 +17,8 @@ export type ConnectionRow = {
 	defaults: Array<{actionId: string}>;
 };
 
-// Never the credential: only `getConnectionWithCredential` and `getConnectionCredential` read it.
+// Never the credential: only `getConnectionWithCredential`, `listConnectionsWithCredential` and
+// `getConnectionCredential` read it.
 const connectionSelect = {
 	id: true,
 	integrationId: true,
@@ -33,6 +34,22 @@ export async function listConnections(orgId: string): Promise<Result<ConnectionR
 		db.connection.findMany({
 			where: {orgId},
 			select: connectionSelect,
+			orderBy: {createdAt: 'asc'},
+		}),
+	);
+}
+
+/**
+ * The organization's connections with their encrypted credentials, for what a sign-in covered,
+ * which the api reads from them.
+ */
+export async function listConnectionsWithCredential(
+	orgId: string,
+): Promise<Result<Array<ConnectionRow & {credential: string | null}>, ApiError>> {
+	return wrapDb(() =>
+		db.connection.findMany({
+			where: {orgId},
+			select: {...connectionSelect, credential: true},
 			orderBy: {createdAt: 'asc'},
 		}),
 	);
