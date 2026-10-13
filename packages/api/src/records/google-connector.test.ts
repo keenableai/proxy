@@ -444,10 +444,3 @@ describe('googleConnector.get', () => {
 		expect(result.isErr() && result.error).toMatchObject({kind: 'not_found', resource: 'record', id: '1Gone'});
 	});
 });
-
-test('files are not written to yet', async () => {
-	const {googleConnector} = await import('./google-connector');
-	const result = await googleConnector.update(target, '1Plan', {name: 'New name'});
-
-	expect(result.isErr() && result.error.kind).toBe('validation_error');
-});

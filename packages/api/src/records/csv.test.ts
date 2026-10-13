@@ -1,0 +1,29 @@
+import {expect, test} from 'bun:test';
+
+import {csvOf, parseCsv} from './csv';
+
+test('values with commas, quotes and line breaks are quoted, and read back as they were', () => {
+	const rows = [
+		['Item', 'Note'],
+		['Rent', 'Paid, on time'],
+		['Say "hi"', 'Two\nlines'],
+		['', ''],
+	];
+	const text = csvOf(rows);
+
+	expect(text).toBe('Item,Note\nRent,"Paid, on time"\n"Say ""hi""","Two\nlines"\n,');
+	expect(parseCsv(text).unwrap()).toEqual(rows);
+});
+
+test('Windows line breaks and a line break at the end end rows, and an empty text is no rows', () => {
+	expect(parseCsv('a,b\r\nc,d\r\n').unwrap()).toEqual([
+		['a', 'b'],
+		['c', 'd'],
+	]);
+	expect(parseCsv('').unwrap()).toEqual([]);
+});
+
+test('a quote inside an unquoted value is kept, and one never closed is turned down', () => {
+	expect(parseCsv('5" pipe,2').unwrap()).toEqual([['5" pipe', '2']]);
+	expect(parseCsv('"open,2').isErr()).toBe(true);
+});
