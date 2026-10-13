@@ -1,0 +1,152 @@
+import {Err, Result} from 'ts-results-es';
+import {z} from 'zod';
+
+import {ApiErr, type ApiError, Do, type FetchError, httpRequest, parseSchema, requirePresent} from '@proxy/utils';
+
+import type {GoogleClient} from '../../utils/google-oauth-client';
+
+/**
+ * Signing in to Google for a connection: OAuth 2.0 with PKCE against Google's own endpoints, with
+ * the client Google sign-in uses (`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`), which is
+ * confidential, so its secret goes with every token request. Every scope Personal Agent Proxy uses
+ * is asked for at once, with offline access for a refresh token; Google's consent screen lets the
+ * person untick some, so what was granted is kept beside the tokens.
+ */
+
+const AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+const TIMEOUT_MS = 15_000;
+
+// Refreshed a minute early, so a token doesn't run out between the check and the call.
+const EXPIRY_MARGIN_MS = 60_000;
+
+/** Every scope a sign-in asks for: the account's address, then Gmail, Drive, Docs, Sheets and Slides. */
+export const GOOGLE_SCOPES = [
+	'openid',
+	'https://www.googleapis.com/auth/userinfo.email',
+	'https://www.googleapis.com/auth/gmail.modify',
+	'https://www.googleapis.com/auth/gmail.send',
+	'https://www.googleapis.com/auth/drive',
+	'https://www.googleapis.com/auth/documents',
+	'https://www.googleapis.com/auth/spreadsheets',
+	'https://www.googleapis.com/auth/presentations',
+];
+
+/** What a Google connection stores, encrypted: its tokens, the scopes Google granted, and the account. */
+export const googleCredentialSchema = z.object({
+	accessToken: z.string(),
+	refreshToken: z.string().nullable(),
+	expiresAt: z.string().nullable(),
+	scopes: z.array(z.string()),
+	email: z.string(),
+});
+
+export type GoogleCredential = z.infer<typeof googleCredentialSchema>;
+
+const tokensSchema = z.object({
+	access_token: z.string().min(1),
+	refresh_token: z.string().optional(),
+	expires_in: z.number().optional(),
+	// Space-separated, as granted.
+	scope: z.string().optional(),
+	// Only on the first exchange, since `openid` is asked for.
+	id_token: z.string().optional(),
+});
+
+type Tokens = z.infer<typeof tokensSchema>;
+
+const idTokenPayloadSchema = z.object({email: z.string().min(1)});
+
+/** Google's sign-in page for a connection, coming back to `redirectUri` with `state`. */
+export function googleAuthorizeUrl(client: GoogleClient, args: {redirectUri: string; state: string; challenge: string}): string {
+	const url = new URL(AUTHORIZE_URL);
+	url.searchParams.set('response_type', 'code');
+	url.searchParams.set('client_id', client.clientId);
+	url.searchParams.set('redirect_uri', args.redirectUri);
+	url.searchParams.set('scope', GOOGLE_SCOPES.join(' '));
+	url.searchParams.set('state', args.state);
+	url.searchParams.set('code_challenge', args.challenge);
+	url.searchParams.set('code_challenge_method', 'S256');
+	// A refresh token, and on every sign-in, not only the first: Google only sends one with consent.
+	url.searchParams.set('access_type', 'offline');
+	url.searchParams.set('prompt', 'consent');
+	url.searchParams.set('include_granted_scopes', 'true');
+	return url.toString();
+}
+
+// Google turning a token request down is the sign-in revoked or the code spent; anything else is
+// Google out of reach.
+function tokenError(error: FetchError): ApiError {
+	if (error.kind === 'http' && error.status >= 400 && error.status < 500) {
+		return ApiErr.credentialsRejected();
+	}
+	return ApiErr.providerUnreachable(error);
+}
+
+function requestTokens(client: GoogleClient, params: Record<string, string>): Promise<Result<Tokens, ApiError>> {
+	return httpRequest(
+		TOKEN_URL,
+		{
+			method: 'POST',
+			headers: {'content-type': 'application/x-www-form-urlencoded'},
+			body: new URLSearchParams({...params, client_id: client.clientId, client_secret: client.clientSecret}).toString(),
+		},
+		{schema: tokensSchema, timeoutMs: TIMEOUT_MS},
+	).then((tokens) => tokens.mapErr(tokenError));
+}
+
+function expiresAt(tokens: Tokens): string | null {
+	return tokens.expires_in === undefined ? null : new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+}
+
+function grantedScopes(tokens: Tokens): string[] | null {
+	return tokens.scope === undefined ? null : tokens.scope.split(' ').filter((scope) => scope !== '');
+}
+
+// The account's address from the id_token's payload. It came straight from Google's token endpoint
+// over TLS, so the payload is trusted without checking its signature, as Google sign-in does
+// (`auth/google.ts`); that saves asking Google's userinfo endpoint for what the token already says.
+function emailOf(idToken: string | undefined): Result<string, ApiError> {
+	const unreadable = (cause: unknown): ApiError => ApiErr.providerUnreachable(cause);
+	return Do<string, ApiError>(($) => {
+		const payload = $(requirePresent(idToken?.split('.')[1], unreadable(new Error('Google answered a sign-in without an id_token'))));
+		const json = $(Result.wrap((): unknown => JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))).mapErr(unreadable));
+		const {email} = $(parseSchema(idTokenPayloadSchema, json).mapErr(unreadable));
+		return email.toLowerCase();
+	});
+}
+
+/** Trades the code Google sent back for the connection's first tokens, and the account they are for. */
+export async function exchangeGoogleCode(client: GoogleClient, args: {redirectUri: string; code: string; verifier: string}): Promise<Result<GoogleCredential, ApiError>> {
+	const tokens = await requestTokens(client, {grant_type: 'authorization_code', code: args.code, redirect_uri: args.redirectUri, code_verifier: args.verifier});
+	return tokens.andThen((value) =>
+		emailOf(value.id_token).map((email) => ({
+			accessToken: value.access_token,
+			refreshToken: value.refresh_token ?? null,
+			expiresAt: expiresAt(value),
+			scopes: grantedScopes(value) ?? [],
+			email,
+		})),
+	);
+}
+
+/** New tokens for a connection whose access token ran out; turned down once the sign-in was revoked. */
+export async function refreshGoogleTokens(client: GoogleClient, credential: GoogleCredential): Promise<Result<GoogleCredential, ApiError>> {
+	if (!credential.refreshToken) {
+		return Err(ApiErr.credentialsRejected());
+	}
+	const tokens = await requestTokens(client, {grant_type: 'refresh_token', refresh_token: credential.refreshToken});
+	return tokens.map((value) => ({
+		...credential,
+		accessToken: value.access_token,
+		// Google keeps the refresh token as it is, so its answer usually has none.
+		refreshToken: value.refresh_token ?? credential.refreshToken,
+		expiresAt: expiresAt(value),
+		scopes: grantedScopes(value) ?? credential.scopes,
+	}));
+}
+
+export function isExpiring(credential: GoogleCredential): boolean {
+	return credential.expiresAt !== null && Date.parse(credential.expiresAt) - EXPIRY_MARGIN_MS < Date.now();
+}
