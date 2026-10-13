@@ -74,8 +74,12 @@ export function googleError(error: FetchError): ApiError {
 	return ApiErr.providerUnreachable(error);
 }
 
+function authHeaders(accessToken: string): Record<string, string> {
+	return {authorization: `Bearer ${accessToken}`, accept: 'application/json'};
+}
+
 function authorized(accessToken: string): RequestInit {
-	return {headers: {authorization: `Bearer ${accessToken}`, accept: 'application/json'}};
+	return {headers: authHeaders(accessToken)};
 }
 
 /** A GET to one of Google's APIs, its answer read with `schema`. */
@@ -87,6 +91,19 @@ export async function googleRequest<S extends z.ZodType>(accessToken: string, ur
 /** A GET whose answer is text, as a file exported is. */
 export async function googleText(accessToken: string, url: URL): Promise<Result<string, ApiError>> {
 	const answer = await httpRequest(url, authorized(accessToken), {parse: 'text', timeoutMs: TIMEOUT_MS});
+	return answer.mapErr(googleError);
+}
+
+/** A POST or PUT to one of Google's APIs with a JSON body, its answer read with `schema`. */
+export async function googleWrite<S extends z.ZodType>(accessToken: string, method: 'POST' | 'PUT', url: URL, body: object, schema: S): Promise<Result<z.infer<S>, ApiError>> {
+	const init = {method, headers: {...authHeaders(accessToken), 'content-type': 'application/json'}, body: JSON.stringify(body)};
+	const answer = await httpRequest(url, init, {schema, timeoutMs: TIMEOUT_MS});
+	return answer.mapErr(googleError);
+}
+
+/** A DELETE, whose answer is empty. */
+export async function googleDelete(accessToken: string, url: URL): Promise<Result<void, ApiError>> {
+	const answer = await httpRequest(url, {...authorized(accessToken), method: 'DELETE'}, {timeoutMs: TIMEOUT_MS});
 	return answer.mapErr(googleError);
 }
 

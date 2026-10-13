@@ -1,0 +1,111 @@
+import {describe, expect, test} from 'bun:test';
+
+import {attachmentNames, folderOf, folderQuery, htmlToText, mapWithLimit, messageBody, type MessagePart} from './gmail-api';
+
+const base64url = (text: string, encoding: BufferEncoding = 'utf8'): string => Buffer.from(text, encoding).toString('base64url');
+
+function textPart(mimeType: string, text: string, contentType = `${mimeType}; charset="UTF-8"`): MessagePart {
+	return {mimeType, filename: '', headers: [{name: 'Content-Type', value: contentType}], body: {size: text.length, data: base64url(text)}};
+}
+
+function attachment(filename: string): MessagePart {
+	return {mimeType: 'application/pdf', filename, headers: [{name: 'Content-Disposition', value: `attachment; filename="${filename}"`}], body: {size: 1200, attachmentId: 'att-1'}};
+}
+
+describe('folderOf', () => {
+	test('a message is in the folder of its label, the inbox before sent, Trash before a draft', () => {
+		expect(folderOf(['UNREAD', 'IMPORTANT', 'CATEGORY_PERSONAL', 'INBOX'])).toBe('Inbox');
+		expect(folderOf(['SENT'])).toBe('Sent');
+		expect(folderOf(['SENT', 'INBOX', 'UNREAD'])).toBe('Inbox');
+		expect(folderOf(['DRAFT'])).toBe('Draft');
+		expect(folderOf(['DRAFT', 'TRASH'])).toBe('Trash');
+		expect(folderOf(['SPAM', 'UNREAD'])).toBe('Spam');
+	});
+
+	test('one in none of the folders is archived', () => {
+		expect(folderOf(['IMPORTANT', 'Label_12'])).toBe('Archive');
+		expect(folderOf([])).toBe('Archive');
+	});
+});
+
+describe('folderQuery', () => {
+	test('a folder is its label, with the search as it is', () => {
+		expect(folderQuery('Inbox', 'from:sam')).toEqual({labelIds: ['INBOX'], q: 'from:sam', includeSpamTrash: false});
+		expect(folderQuery('Draft', null)).toEqual({labelIds: ['DRAFT'], q: null, includeSpamTrash: false});
+		expect(folderQuery('Sent', null)).toEqual({labelIds: ['SENT'], q: null, includeSpamTrash: false});
+	});
+
+	test('Trash and Spam are asked for, since Gmail leaves them out otherwise', () => {
+		expect(folderQuery('Trash', null)).toEqual({labelIds: ['TRASH'], q: null, includeSpamTrash: true});
+		expect(folderQuery('Spam', 'invoice')).toEqual({labelIds: ['SPAM'], q: 'invoice', includeSpamTrash: true});
+	});
+
+	test('the archive is a search for what is in no folder, the search in parentheses beside it', () => {
+		expect(folderQuery('Archive', null)).toEqual({labelIds: [], q: '-in:inbox -in:sent -in:drafts -in:trash -in:spam', includeSpamTrash: false});
+		expect(folderQuery('Archive', 'from:sam OR from:alex').q).toBe('-in:inbox -in:sent -in:drafts -in:trash -in:spam (from:sam OR from:alex)');
+	});
+
+	test('without a folder, all mail but Spam and Trash', () => {
+		expect(folderQuery(null, null)).toEqual({labelIds: [], q: null, includeSpamTrash: false});
+	});
+});
+
+describe('messageBody', () => {
+	test('the plain text part of an alternative, before the HTML one', () => {
+		const payload: MessagePart = {
+			mimeType: 'multipart/alternative',
+			filename: '',
+			parts: [textPart('text/plain', 'Hi Alex,\n\nSee you Friday.\n'), textPart('text/html', '<p>Hi Alex,</p><p>See you <b>Friday</b>.</p>')],
+		};
+
+		expect(messageBody(payload)).toBe('Hi Alex,\n\nSee you Friday.');
+	});
+
+	test('a message with only HTML reads as its text, with links and blocks kept', () => {
+		const html =
+			'<html><head><style>p {color: red}</style></head><body><p>Your order&nbsp;has shipped &amp; is on its way.</p><div>Track it <a href="https://example.com/track/1">here</a>.</div><ul><li>One</li><li>Two</li></ul></body></html>';
+
+		expect(messageBody(textPart('text/html', html))).toBe('Your order has shipped & is on its way.\nTrack it here (https://example.com/track/1).\n\n- One\n- Two');
+	});
+
+	test('nested parts are walked, a text part in the charset it names, and the attachments listed after', () => {
+		const latin = {mimeType: 'text/plain', filename: '', headers: [{name: 'Content-Type', value: 'text/plain; charset=ISO-8859-1'}], body: {size: 12, data: base64url('Grüße, Sam', 'latin1')}};
+		const payload: MessagePart = {
+			mimeType: 'multipart/mixed',
+			filename: '',
+			parts: [{mimeType: 'multipart/alternative', filename: '', parts: [latin, textPart('text/html', '<p>Grüße</p>')]}, attachment('invoice.pdf'), attachment('receipt.pdf')],
+		};
+
+		expect(messageBody(payload)).toBe('Grüße, Sam\n\nAttachments: invoice.pdf, receipt.pdf');
+		expect(attachmentNames(payload)).toEqual(['invoice.pdf', 'receipt.pdf']);
+	});
+
+	test('a text attachment is not the body', () => {
+		const payload: MessagePart = {mimeType: 'multipart/mixed', filename: '', parts: [{...textPart('text/plain', 'notes'), filename: 'notes.txt'}, textPart('text/html', '<p>The body</p>')]};
+
+		expect(messageBody(payload)).toBe('The body\n\nAttachments: notes.txt');
+	});
+
+	test('a message without parts is empty', () => {
+		expect(messageBody(undefined)).toBe('');
+	});
+});
+
+test('htmlToText decodes entities only once the tags are gone', () => {
+	expect(htmlToText('<p>&lt;b&gt; is bold &#8212; &#x263A;</p>')).toBe('<b> is bold — ☺');
+});
+
+test('mapWithLimit keeps the order and never runs more than the limit at once', async () => {
+	let running = 0;
+	let most = 0;
+	const results = await mapWithLimit([5, 1, 4, 2, 3, 0, 6], 3, async (value) => {
+		running += 1;
+		most = Math.max(most, running);
+		await Bun.sleep(value);
+		running -= 1;
+		return value * 10;
+	});
+
+	expect(results).toEqual([50, 10, 40, 20, 30, 0, 60]);
+	expect(most).toBe(3);
+});
