@@ -23,6 +23,16 @@ test('Windows line breaks and a line break at the end end rows, and an empty tex
 	expect(parseCsv('').unwrap()).toEqual([]);
 });
 
+test('a line with nothing on it is no row, so it empties nothing', () => {
+	expect(parseCsv('a\n\nb\n\n').unwrap()).toEqual([['a'], ['b']]);
+	expect(parseCsv('a,b\r\n\r\nc,d').unwrap()).toEqual([
+		['a', 'b'],
+		['c', 'd'],
+	]);
+	expect(parseCsv('\n').unwrap()).toEqual([]);
+	expect(parseCsv('a,\n').unwrap()).toEqual([['a', '']]);
+});
+
 test('an empty value in quotes is a row of its own, so one cell can be emptied', () => {
 	expect(parseCsv('""').unwrap()).toEqual([['']]);
 	expect(parseCsv('a\n""\n').unwrap()).toEqual([['a'], ['']]);

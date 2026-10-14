@@ -109,8 +109,15 @@ describe('reading a range', () => {
 		const {googleConnector} = await import('./google-connector');
 		await googleConnector.newCommands?.read?.(target, {spreadsheet: '1BudgetSheet', range: 'Sheet1!B:B'});
 		await googleConnector.newCommands?.read?.(target, {spreadsheet: 'https://drive.google.com/open?id=1BudgetSheet', range: 'A1:C9'});
+		await googleConnector.newCommands?.read?.(target, {spreadsheet: '1BudgetSheet', range: '$A$1:$F$20'});
+		await googleConnector.newCommands?.read?.(target, {spreadsheet: '1BudgetSheet', range: 'Übersicht!A1'});
 
-		expect(google.requests.map((request) => decodeURIComponent(request.url.pathname))).toEqual(['/v4/spreadsheets/1BudgetSheet/values/Sheet1!B:B', '/v4/spreadsheets/1BudgetSheet/values/A1:C9']);
+		expect(google.requests.map((request) => decodeURIComponent(request.url.pathname))).toEqual([
+			'/v4/spreadsheets/1BudgetSheet/values/Sheet1!B:B',
+			'/v4/spreadsheets/1BudgetSheet/values/A1:C9',
+			'/v4/spreadsheets/1BudgetSheet/values/$A$1:$F$20',
+			'/v4/spreadsheets/1BudgetSheet/values/Übersicht!A1',
+		]);
 	});
 
 	test('a range that isn’t A1 notation, or a spreadsheet that isn’t Google’s, never reaches Google', async () => {

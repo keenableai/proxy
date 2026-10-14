@@ -36,12 +36,12 @@ function requireSpreadsheet(values: RecordValues): Result<string, ApiError> {
 	return Ok(id);
 }
 
-// A tab's title, quoted as A1 notation quotes it, a quote in it doubled, or one without spaces or
-// punctuation as it is.
-const TAB = String.raw`(?:'(?:[^'\x00-\x1f]|''){1,100}'|[A-Za-z0-9_]{1,100})`;
-// A cell (B2), a whole column (B) or a whole row (2).
-const CELL = String.raw`(?:[A-Za-z]{1,3}\d{0,7}|\d{1,7})`;
-const A1 = new RegExp(String.raw`^(?:${TAB}!)?${CELL}(?::${CELL})?$|^${TAB}$`);
+// A tab's title, quoted as A1 notation quotes it, a quote in it doubled, or one of letters, digits
+// and underscores alone as it is.
+const TAB = String.raw`(?:'(?:[^'\x00-\x1f]|''){1,100}'|[\p{L}\p{N}_]{1,100})`;
+// A cell (B2, or $B$2 as a formula fixes it), a whole column (B) or a whole row (2).
+const CELL = String.raw`(?:\$?[A-Za-z]{1,3}(?:\$?\d{1,7})?|\$?\d{1,7})`;
+const A1 = new RegExp(String.raw`^(?:${TAB}!)?${CELL}(?::${CELL})?$|^${TAB}$`, 'u');
 
 function requireRange(values: RecordValues): Result<string, ApiError> {
 	const range = (values.range ?? '').trim();

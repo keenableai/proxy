@@ -307,6 +307,14 @@ describe('creating files', () => {
 		expect(JSON.parse(writes()[0]?.body ?? '').data).toEqual([{range: "'Q1'!C2", majorDimension: 'ROWS', values: [['Done']]}]);
 	});
 
+	test('a row given a name is turned down, since its name is its first value', async () => {
+		const {googleConnector} = await import('./google-connector');
+		const result = await googleConnector.create(target, {name: 'Travel', content: 'Status: Due'}, 'sheet-1Budget-0');
+
+		expect(messageOf(result)).toBe('A row’s name is its first value: write it in content');
+		expect(writes()).toEqual([]);
+	});
+
 	test('a row naming a header the tab lacks is turned down before anything is written', async () => {
 		const {googleConnector} = await import('./google-connector');
 		const result = await googleConnector.create(target, {content: 'Colour: red'}, 'sheet-1Budget-0');

@@ -558,6 +558,9 @@ function addRow(drive: Drive, ref: {fileId: string; sheetId: number}, values: Re
 		if ((values.kind ?? '') !== '' && values.kind !== 'Row') {
 			return $(Err(ApiErr.validationError('A tab holds rows: leave kind out, or make it Row')));
 		}
+		if ((values.name ?? '') !== '') {
+			return $(Err(ApiErr.validationError('A row’s name is its first value: write it in content')));
+		}
 		const {file, sheet} = $(await getSheet(drive, ref.fileId, ref.sheetId));
 		const {headers, names} = $(await headersOf(drive, file, sheet));
 		if (isBlank(headers)) {
