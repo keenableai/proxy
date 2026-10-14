@@ -95,16 +95,39 @@ export async function putValues(accessToken: string, spreadsheetId: string, rang
 	return answer.map((written) => ({range: written.updatedRange ?? range, values: written.updatedData?.values ?? []}));
 }
 
+// Where a write's answer says it wrote: the part after the last "!", since a tab's title can hold
+// one too, as in `'a!B7'!A12:C12`.
+const writtenSchema = /^\$?([A-Z]+)\$?(\d+)(?::\$?([A-Z]+)\$?\d+)?$/;
+
+function writtenCells(range: string): Result<{column: number; row: number; lastColumn: number}, ApiError> {
+	const [, first = '', row = '', last] = writtenSchema.exec(range.slice(range.lastIndexOf('!') + 1)) ?? [];
+	return requirePresent(row || null, ApiErr.validationError(`Google answered a range that names no row: ${range}`)).map(() => ({
+		column: columnIndex(first),
+		row: Number(row),
+		lastColumn: columnIndex(last ?? first),
+	}));
+}
+
 /**
- * Adds a row under the last one of the table at the top of a tab, as if typed in, and answers the
- * row's number.
+ * Adds a row under the last of a tab's rows that hold anything, as if typed in, and answers the
+ * row's number. Sheets appends after the last block of rows in the range it is given, starting at
+ * that block's first column, so the whole tab is given; where its last block doesn't start in
+ * column A, the row is written again from A.
  */
 export async function appendRow(accessToken: string, spreadsheetId: string, title: string, cells: string[]): Promise<Result<number, ApiError>> {
-	const url = valuesUrl(spreadsheetId, rowsRange(title, 1, 1), {valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS'}, ':append');
+	const url = valuesUrl(spreadsheetId, quotedTitle(title), {valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS'}, ':append');
 	return Do(async ($) => {
 		const {updates} = $(await googleWrite(accessToken, 'POST', url, {majorDimension: 'ROWS', values: [cells]}, appendSchema));
-		const row = /!\$?[A-Z]+\$?(\d+)/.exec(updates.updatedRange)?.[1];
-		return Number($(requirePresent(row, ApiErr.validationError(`Google answered a range that names no row: ${updates.updatedRange}`))));
+		const written = $(writtenCells(updates.updatedRange));
+		if (written.column === 0) {
+			return written.row;
+		}
+		// The row's own cells from A, and the ones written past them emptied.
+		const width = Math.max(cells.length, written.lastColumn + 1);
+		const row = Array.from({length: width}, (_, column) => cells[column] ?? '');
+		const range = `${quotedTitle(title)}!A${written.row}:${columnLetters(width - 1)}${written.row}`;
+		$(await putValues(accessToken, spreadsheetId, range, [row]));
+		return written.row;
 	});
 }
 
@@ -130,6 +153,11 @@ export async function getRanges(accessToken: string, spreadsheetId: string, rang
 	}
 	const batch = await googleRequest(accessToken, url, batchSchema);
 	return batch.map(({valueRanges}) => valueRanges.map((range) => range.values ?? []));
+}
+
+/** A column's position counting from 0, from its letters: 0 for A, 26 for AA. */
+export function columnIndex(letters: string): number {
+	return [...letters].reduce((index, letter) => index * 26 + (letter.charCodeAt(0) - 64), 0) - 1;
 }
 
 /** A column's letters, from its position counting from 0: A, Z, AA. */

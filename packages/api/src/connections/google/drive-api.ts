@@ -129,6 +129,11 @@ export type NewFile = {name: string; mimeType: string; parent: string};
 /** What a file is uploaded as: its type, such as `text/markdown`, and its text. */
 export type Upload = {type: string; body: string};
 
+// Text uploaded as the UTF-8 it is sent as, so Drive reads letters beyond ASCII as they are.
+function textType(type: string): string {
+	return `${type}; charset=UTF-8`;
+}
+
 // A file's metadata and its content in one request, as Drive's multipart upload takes them.
 function multipart(metadata: object, upload: Upload): Upload {
 	const boundary = `proxy-${randomUUID()}`;
@@ -138,7 +143,7 @@ function multipart(metadata: object, upload: Upload): Upload {
 		'',
 		JSON.stringify(metadata),
 		`--${boundary}`,
-		`Content-Type: ${upload.type}`,
+		`Content-Type: ${textType(upload.type)}`,
 		'',
 		upload.body,
 		`--${boundary}--`,
@@ -163,5 +168,11 @@ export function updateFile(accessToken: string, fileId: string, changes: {name?:
 
 /** Replaces all of a file's content with what is uploaded, which Drive converts to the file's own type. */
 export function replaceContent(accessToken: string, fileId: string, upload: Upload): Promise<Result<DriveFile, ApiError>> {
-	return googleUpload(accessToken, 'PATCH', driveUrl(`/files/${fileId}`, {uploadType: 'media', fields: FILE_FIELDS, supportsAllDrives: 'true'}, UPLOAD), upload, driveFileSchema);
+	return googleUpload(
+		accessToken,
+		'PATCH',
+		driveUrl(`/files/${fileId}`, {uploadType: 'media', fields: FILE_FIELDS, supportsAllDrives: 'true'}, UPLOAD),
+		{...upload, type: textType(upload.type)},
+		driveFileSchema,
+	);
 }

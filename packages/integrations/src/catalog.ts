@@ -718,7 +718,8 @@ const google: Integration = {
 					label: 'Kind',
 					type: 'select',
 					// A place is one of the four at the top: My Drive, Shared with me, Shared drives, Recent.
-					options: ['Place', ...FILE_KINDS],
+					// A shared drive holds files as a folder does, but isn't renamed or trashed here.
+					options: ['Place', 'Shared drive', ...FILE_KINDS],
 				},
 				{key: 'modified', label: 'Modified', type: 'datetime', system: true},
 				// Whoever owns the file in Drive; files in a shared drive have none.
@@ -763,12 +764,12 @@ const google: Integration = {
 			fields: [
 				// The spreadsheet's id, or its link.
 				{key: 'spreadsheet', label: 'Spreadsheet', type: 'text'},
-				// A1 notation with the tab: 'Q1 Sales'!A1:F20.
+				// A1 notation, with the tab or in the first one: 'Q1 Sales'!A1:F20, A1:F20.
 				{key: 'range', label: 'Range', type: 'text'},
 				// What Write puts in the range, as CSV, one row a line, each value as if typed into the
 				// cell: =SUM(B2:B9) is a formula.
 				{key: 'values', label: 'Values', type: 'longtext'},
-				// "12 rows".
+				// "12 rows", or how many of more were answered: at most 1000.
 				{key: 'rows', label: 'Rows', type: 'text', system: true},
 				// The range's values as Sheets shows them, as CSV, one row a line: after Write, as written.
 				{key: 'result', label: 'Result', type: 'longtext', system: true},

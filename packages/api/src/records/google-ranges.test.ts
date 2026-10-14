@@ -4,7 +4,7 @@ import {Ok, type Result} from 'ts-results-es';
 import type {ApiError} from '@proxy/utils';
 import {findCollection, findIntegration, type Collection} from '@proxy/integrations';
 
-mock.module('@proxy/db/connection', () => ({updateConnectionCredential: mock()}));
+mock.module('@proxy/db/connection', () => ({updateConnectionCredential: mock(), getConnectionCredential: mock(async () => Ok(null))}));
 
 mock.module('../observability/log', () => ({
 	log: {debug: mock(), info: mock(), warn: mock(), error: mock()},
@@ -96,6 +96,15 @@ describe('reading a range', () => {
 		expect(record?.values).toEqual({spreadsheet: '1BudgetSheet_x-9', range: "'Q1 Sales'!A1:C3", rows: '3 rows', result: 'Item,Amount\nRent,1200\n"Say ""hi""",'});
 	});
 
+	test('a range of more than 1000 rows answers the first 1000, saying how many there are', async () => {
+		google.answer = () => Response.json({range: "'Q1 Sales'!A1:A1500", majorDimension: 'ROWS', values: Array.from({length: 1500}, (_, index) => [String(index + 1)])});
+		const {googleConnector} = await import('./google-connector');
+		const record = (await googleConnector.newCommands?.read?.(target, {spreadsheet: LINK, range: "'Q1 Sales'!A:A", values: ''}))?.unwrap();
+
+		expect(record?.values.rows).toBe('The first 1000 of 1500 rows: read the rest as a range starting below them');
+		expect(record?.values.result?.split('\n')).toHaveLength(1000);
+	});
+
 	test('a spreadsheet is taken by its id or a Drive link, and a range without a tab or in an unquoted one', async () => {
 		const {googleConnector} = await import('./google-connector');
 		await googleConnector.newCommands?.read?.(target, {spreadsheet: '1BudgetSheet', range: 'Sheet1!B:B'});
@@ -146,12 +155,19 @@ describe('writing a range', () => {
 		expect(record?.values).toEqual({spreadsheet: '1BudgetSheet_x-9', range: "'Q1 Sales'!A2:C3", rows: '2 rows', result: 'Rent,"1,200","2,400"\n"Food, drink",300,600'});
 	});
 
+	test('an empty value in quotes empties the cell', async () => {
+		const {googleConnector} = await import('./google-connector');
+		await googleConnector.newCommands?.write?.(target, {spreadsheet: LINK, range: 'A1', values: '""'});
+
+		expect(JSON.parse(google.requests[0]?.body ?? '').values).toEqual([['']]);
+	});
+
 	test('no values, or a quote never closed, is turned down', async () => {
 		const {googleConnector} = await import('./google-connector');
 		const empty = await googleConnector.newCommands?.write?.(target, {spreadsheet: LINK, range: 'A1', values: ''});
 		const unclosed = await googleConnector.newCommands?.write?.(target, {spreadsheet: LINK, range: 'A1', values: '"Rent,1200'});
 
-		expect(messageOf(empty)).toBe('Write the values as CSV, one row a line');
+		expect(messageOf(empty)).toBe('Write the values as CSV, one row a line; "" empties a cell');
 		expect(messageOf(unclosed)).toBe('The CSV has a quote that is never closed');
 		expect(google.requests).toEqual([]);
 	});

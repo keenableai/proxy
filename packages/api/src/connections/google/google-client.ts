@@ -38,6 +38,9 @@ function readGoogleError(error: Extract<FetchError, {kind: 'http'}>): {reasons: 
 	return {reasons, message};
 }
 
+/** What reading a file past Google's export limit says, where its content would be. */
+export const TOO_LARGE_TO_READ = 'This file is too large to read; Google exports at most 10 MB';
+
 const RATE_LIMITED = ['rateLimitExceeded', 'userRateLimitExceeded', 'RATE_LIMIT_EXCEEDED'];
 
 // What Google says of a call whose token lacks the scope it takes, as sending a draft does with
@@ -61,7 +64,7 @@ export function googleError(error: FetchError): ApiError {
 
 	const {reasons, message} = readGoogleError(error);
 	if (reasons.includes('exportSizeLimitExceeded')) {
-		return ApiErr.validationError('This file is too large to read; Google exports at most 10 MB');
+		return ApiErr.validationError(TOO_LARGE_TO_READ);
 	}
 	if (reasons.includes('accessNotConfigured') || reasons.includes('SERVICE_DISABLED') || /has not been used|is disabled/.test(message)) {
 		return ApiErr.validationError(message);

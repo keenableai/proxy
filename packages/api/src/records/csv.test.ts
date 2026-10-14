@@ -23,6 +23,11 @@ test('Windows line breaks and a line break at the end end rows, and an empty tex
 	expect(parseCsv('').unwrap()).toEqual([]);
 });
 
+test('an empty value in quotes is a row of its own, so one cell can be emptied', () => {
+	expect(parseCsv('""').unwrap()).toEqual([['']]);
+	expect(parseCsv('a\n""\n').unwrap()).toEqual([['a'], ['']]);
+});
+
 test('a quote inside an unquoted value is kept, and one never closed is turned down', () => {
 	expect(parseCsv('5" pipe,2').unwrap()).toEqual([['5" pipe', '2']]);
 	expect(parseCsv('"open,2').isErr()).toBe(true);

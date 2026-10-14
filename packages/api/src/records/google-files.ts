@@ -21,7 +21,7 @@ import {
 	type FileParents,
 	type SharedDrive,
 } from '../connections/google/drive-api';
-import {callGoogle} from '../connections/google/google-client';
+import {callGoogle, TOO_LARGE_TO_READ} from '../connections/google/google-client';
 import {appendRow, cellRange, columnLetters, getRanges, getSheets, renameSheet, rowsRange, updateCells, type Sheet} from '../connections/google/sheets-api';
 import type {CommandRunner, Crumb, DataRecord, ListQuery, RecordPage, RecordTarget, RecordValues} from './connector';
 import {readValueLines, valueLines} from './value-lines';
@@ -154,7 +154,7 @@ function placeRecord(place: Place): DataRecord {
 }
 
 function driveRecord(drive: SharedDrive): DataRecord {
-	return {id: `drive-${drive.id}`, values: {name: drive.name, kind: 'Folder'}, updatedAt: '', hasChildren: true};
+	return {id: `drive-${drive.id}`, values: {name: drive.name, kind: 'Shared drive'}, updatedAt: '', hasChildren: true};
 }
 
 function sheetId(file: DriveFile, sheet: Sheet): string {
@@ -187,15 +187,30 @@ function columnName(headers: string[], column: number): string {
 	return headers[column] || `Column ${columnLetters(column)}`;
 }
 
-// Every column of a tab a row's lines can name, as far as its grid or its headers go.
+/**
+ * Every column of a tab a row's lines can name, as far as its grid or its headers go, each name
+ * once, so a line is read back into the column it was written from: a header repeated, or the
+ * same as a column without one goes by, goes on with its column's letter, "Status (E)".
+ */
 function columnNames(headers: string[], sheet: Sheet): string[] {
 	const count = Math.min(Math.max(headers.length, sheet.columnCount), MAX_COLUMNS);
-	return Array.from({length: count}, (_, column) => columnName(headers, column));
+	const names: string[] = [];
+	const taken = new Set<string>();
+	for (let column = 0; column < count; column += 1) {
+		let name = columnName(headers, column);
+		while (taken.has(name)) {
+			name = `${name} (${columnLetters(column)})`;
+		}
+		taken.add(name);
+		names.push(name);
+	}
+	return names;
 }
 
 // A row's values under the tab's headers; a column without one goes by its letter.
 function rowRecord(file: DriveFile, sheet: Sheet, headers: string[], row: number, cells: string[]): DataRecord {
-	const content = valueLines(cells.map((cell, column): [string, string] => [columnName(headers, column), cell]));
+	const names = columnNames(headers, {...sheet, columnCount: Math.max(sheet.columnCount, cells.length)});
+	const content = valueLines(cells.map((cell, column): [string, string] => [names[column] ?? columnName(headers, column), cell]));
 	return {
 		id: `row-${file.id}-${sheet.sheetId}-${row}`,
 		// Rows have no time of their own; the spreadsheet's is when anything in it changed.
@@ -425,15 +440,25 @@ export function listFilesTree(target: RecordTarget, query: ListQuery): Promise<R
 	);
 }
 
+// A file's content as Google exports it; one past Google's export limit says so in its place, so
+// the file can still be renamed or moved to Trash.
+async function exported(drive: Drive, fileId: string, type: string): Promise<Result<string, ApiError>> {
+	const content = await exportFile(drive.token, fileId, type);
+	if (content.isErr() && content.error.kind === 'validation_error' && content.error.message === TOO_LARGE_TO_READ) {
+		return Ok(TOO_LARGE_TO_READ);
+	}
+	return content;
+}
+
 // A document as Markdown, a presentation as text, a spreadsheet's tabs one a line; other files have none.
 function contentOf(drive: Drive, file: DriveFile): Promise<Result<string, ApiError>> {
 	return Do(async ($) => {
 		const kind = kindOf(file.mimeType);
 		if (kind === 'Document') {
-			return $(await exportFile(drive.token, file.id, 'text/markdown'));
+			return $(await exported(drive, file.id, 'text/markdown'));
 		}
 		if (kind === 'Presentation') {
-			return $(await exportFile(drive.token, file.id, 'text/plain'));
+			return $(await exported(drive, file.id, 'text/plain'));
 		}
 		if (kind === 'Spreadsheet') {
 			const sheets = $(await getSheets(drive.token, file.id));
@@ -539,8 +564,7 @@ function addRow(drive: Drive, ref: {fileId: string; sheetId: number}, values: Re
 			return $(Err(ApiErr.validationError(`“${sheet.title}” has no headers in its first row; write a range instead`)));
 		}
 		const written = $(readValueLines(values.content ?? '', names));
-		// A header named twice takes the value in its first column.
-		const cells = names.map((name, column) => (names.indexOf(name) === column ? (written[name] ?? '') : ''));
+		const cells = names.map((name) => written[name] ?? '');
 		const last = cells.findLastIndex((cell) => cell !== '');
 		if (last === -1) {
 			return $(Err(ApiErr.validationError('Write the row’s values in content, one "Header: value" a line')));
@@ -621,15 +645,20 @@ const CONTENT_REFUSALS: Partial<Record<string, string>> = {
 
 const OTHER_FILE_REFUSAL = 'Only a document’s content can be written here; this file’s name can be changed';
 
-// A file renamed, and a document's content replaced, each only where it is written differently.
-function updateFileRef(drive: Drive, fileId: string, values: RecordValues): Promise<Result<DataRecord, ApiError>> {
+/**
+ * A file renamed, and a document's content replaced, each only where it is written differently
+ * from how it read, `before`, so a rename doesn't upload the content as it was read over a change
+ * made since; without `before`, from how it reads now.
+ */
+function updateFileRef(drive: Drive, fileId: string, values: RecordValues, before: DataRecord | undefined): Promise<Result<DataRecord, ApiError>> {
 	return Do(async ($) => {
 		const file = $(await getFile(drive.token, fileId));
 		const kind = kindOf(file.mimeType);
 		$(requireKind(kind, values.kind));
 		const name = $(renamed(file.name, values.name));
 		const content = values.content ?? null;
-		const replaced = content !== null && content !== $(await contentOf(drive, file));
+		const read = before?.values.content ?? $(await contentOf(drive, file));
+		const replaced = content !== null && content !== read;
 		if (replaced && kind !== 'Document') {
 			return $(Err(ApiErr.validationError(CONTENT_REFUSALS[kind] ?? OTHER_FILE_REFUSAL)));
 		}
@@ -678,8 +707,7 @@ function updateRow(drive: Drive, ref: {fileId: string; sheetId: number; row: num
 		const written = $(readValueLines(values.content ?? '', names));
 		const changed = names.flatMap((name, column) => {
 			const value = written[name];
-			const first = names.indexOf(name) === column;
-			return first && value !== undefined && value !== (cells[column] ?? '') ? [{range: cellRange(sheet.title, column, ref.row), value}] : [];
+			return value !== undefined && value !== (cells[column] ?? '') ? [{range: cellRange(sheet.title, column, ref.row), value}] : [];
 		});
 		if (changed.length === 0) {
 			return current;
@@ -689,7 +717,7 @@ function updateRow(drive: Drive, ref: {fileId: string; sheetId: number; row: num
 	});
 }
 
-function updateRef(drive: Drive, ref: FileRef, values: RecordValues): Promise<Result<DataRecord, ApiError>> {
+function updateRef(drive: Drive, ref: FileRef, values: RecordValues, before: DataRecord | undefined): Promise<Result<DataRecord, ApiError>> {
 	if (ref.kind === 'place' || ref.kind === 'drive') {
 		return refuse('The places at the top and shared drives aren’t changed here, only what is in them');
 	}
@@ -699,15 +727,15 @@ function updateRef(drive: Drive, ref: FileRef, values: RecordValues): Promise<Re
 	if (ref.kind === 'row') {
 		return updateRow(drive, ref, values);
 	}
-	return updateFileRef(drive, ref.fileId, values);
+	return updateFileRef(drive, ref.fileId, values, before);
 }
 
 /** A file, tab or row changed where it is written differently, answered as opening it would. */
-export function updateFilesRecord(target: RecordTarget, recordId: string, values: RecordValues): Promise<Result<DataRecord, ApiError>> {
+export function updateFilesRecord(target: RecordTarget, recordId: string, values: RecordValues, before?: DataRecord): Promise<Result<DataRecord, ApiError>> {
 	return withDrive(target, (drive) =>
 		Do(async ($) => {
 			const ref = $(requireRef(recordId));
-			return $((await updateRef(drive, ref, values)).mapErr(notFoundAs(recordId)));
+			return $((await updateRef(drive, ref, values, before)).mapErr(notFoundAs(recordId)));
 		}),
 	);
 }

@@ -21,8 +21,11 @@ export function parseCsv(text: string): Result<string[][], ApiError> {
 	let row: string[] = [];
 	let value = '';
 	let quoted = false;
+	// Whether the line read so far has a value, even an empty one in quotes, as `""` is.
+	let started = false;
 	for (let index = 0; index < text.length; index += 1) {
 		const char = text[index];
+		started = true;
 		if (quoted && char === '"' && text[index + 1] === '"') {
 			value += '"';
 			index += 1;
@@ -48,6 +51,7 @@ export function parseCsv(text: string): Result<string[][], ApiError> {
 			rows.push([...row, value]);
 			row = [];
 			value = '';
+			started = false;
 			continue;
 		}
 		value += char;
@@ -56,7 +60,7 @@ export function parseCsv(text: string): Result<string[][], ApiError> {
 		return Err(ApiErr.validationError('The CSV has a quote that is never closed'));
 	}
 	// A line break at the very end ends the last row rather than starting an empty one.
-	if (value !== '' || row.length > 0) {
+	if (started) {
 		rows.push([...row, value]);
 	}
 	return Ok(rows);

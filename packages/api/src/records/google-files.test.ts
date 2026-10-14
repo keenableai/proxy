@@ -4,7 +4,7 @@ import {Ok, type Result} from 'ts-results-es';
 import type {ApiError} from '@proxy/utils';
 import {findCollection, findIntegration, type Collection} from '@proxy/integrations';
 
-mock.module('@proxy/db/connection', () => ({updateConnectionCredential: mock()}));
+mock.module('@proxy/db/connection', () => ({updateConnectionCredential: mock(), getConnectionCredential: mock(async () => Ok(null))}));
 
 mock.module('../observability/log', () => ({
 	log: {debug: mock(), info: mock(), warn: mock(), error: mock()},
@@ -79,7 +79,9 @@ let state = fresh();
 
 type Request = {method: string; url: URL; type: string; body: string};
 
-const google = {requests: [] as Request[]};
+// Where Sheets puts an appended row: after the last rows holding anything, from the first column of
+// the block they are in.
+const google = {requests: [] as Request[], appendColumn: 'A', appendedTitle: 'Q1'};
 
 function driveFile(file: File): object {
 	return {
@@ -166,9 +168,17 @@ function answer(request: Request): Response {
 	}
 	if (method === 'POST' && path.endsWith(':append')) {
 		const [row = []] = JSON.parse(request.body).values;
-		state.grid.push(row);
+		const shift = google.appendColumn.charCodeAt(0) - 65;
+		state.grid.push([...Array.from({length: shift}, () => ''), ...row]);
 		const at = state.grid.length;
-		return Response.json({updates: {updatedRange: `Q1!A${at}:C${at}`, updatedRows: 1}});
+		const last = String.fromCharCode(65 + shift + row.length - 1);
+		return Response.json({updates: {updatedRange: `${google.appendedTitle}!${google.appendColumn}${at}:${last}${at}`, updatedRows: 1}});
+	}
+	if (method === 'PUT' && path.startsWith('/v4/spreadsheets/1Budget/values/')) {
+		const {range, values} = JSON.parse(request.body);
+		const [, row = '1'] = /!A(\d+):[A-Z]+\d+$/.exec(range) ?? [];
+		state.grid[Number(row) - 1] = values[0];
+		return Response.json({updatedRange: range, updatedData: {range, values}});
 	}
 	if (method === 'POST' && path === '/v4/spreadsheets/1Budget/values:batchUpdate') {
 		for (const {range, values} of JSON.parse(request.body).data) {
@@ -201,6 +211,8 @@ function writes(): Request[] {
 beforeEach(() => {
 	state = fresh();
 	google.requests = [];
+	google.appendColumn = 'A';
+	google.appendedTitle = 'Q1';
 });
 
 describe('creating files', () => {
@@ -232,8 +244,16 @@ describe('creating files', () => {
 		expect(docUpload?.url.pathname).toBe('/upload/drive/v3/files');
 		expect(Object.fromEntries(docUpload?.url.searchParams ?? [])).toMatchObject({uploadType: 'multipart', supportsAllDrives: 'true'});
 		expect(docUpload?.type).toMatch(/^multipart\/related; boundary=/);
-		expect(multipartOf(docUpload as Request)).toEqual({metadata: {name: 'Notes', mimeType: MIME.document, parents: ['1Projects']}, type: 'text/markdown', content: '# Notes\n\nIt’s a start.'});
-		expect(multipartOf(sheetUpload as Request)).toEqual({metadata: {name: 'Costs', mimeType: MIME.spreadsheet, parents: ['0ATeamDrive']}, type: 'text/csv', content: 'Item,Amount\nRent,"1,200"'});
+		expect(multipartOf(docUpload as Request)).toEqual({
+			metadata: {name: 'Notes', mimeType: MIME.document, parents: ['1Projects']},
+			type: 'text/markdown; charset=UTF-8',
+			content: '# Notes\n\nIt’s a start.',
+		});
+		expect(multipartOf(sheetUpload as Request)).toEqual({
+			metadata: {name: 'Costs', mimeType: MIME.spreadsheet, parents: ['0ATeamDrive']},
+			type: 'text/csv; charset=UTF-8',
+			content: 'Item,Amount\nRent,"1,200"',
+		});
 		expect(doc.values).toMatchObject({name: 'Notes', kind: 'Document', content: '# Notes\n\nIt’s a start.'});
 	});
 
@@ -249,10 +269,42 @@ describe('creating files', () => {
 		const record = (await googleConnector.create(target, {name: '', kind: '', content: 'Status: Due\nItem: Travel'}, 'sheet-1Budget-0')).unwrap();
 
 		const [append] = writes();
-		expect(decodeURIComponent(append?.url.pathname ?? '')).toBe("/v4/spreadsheets/1Budget/values/'Q1'!A1:ZZ1:append");
+		expect(decodeURIComponent(append?.url.pathname ?? '')).toBe("/v4/spreadsheets/1Budget/values/'Q1':append");
 		expect(Object.fromEntries(append?.url.searchParams ?? [])).toEqual({valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS'});
 		expect(JSON.parse(append?.body ?? '')).toEqual({majorDimension: 'ROWS', values: [['Travel', '', 'Due']]});
 		expect(record).toMatchObject({id: 'row-1Budget-0-4', values: {name: 'Travel', kind: 'Row', content: 'Item: Travel\nStatus: Due'}});
+	});
+
+	test('a row Sheets appends past column A, under the last block of rows, is written again from A', async () => {
+		google.appendColumn = 'B';
+		const {googleConnector} = await import('./google-connector');
+		const record = (await googleConnector.create(target, {content: 'Item: Travel\nStatus: Due'}, 'sheet-1Budget-0')).unwrap();
+
+		const [, rewrite] = writes();
+		expect(rewrite?.method).toBe('PUT');
+		expect(JSON.parse(rewrite?.body ?? '')).toEqual({range: "'Q1'!A4:D4", majorDimension: 'ROWS', values: [['Travel', '', 'Due', '']]});
+		expect(record).toMatchObject({id: 'row-1Budget-0-4', values: {content: 'Item: Travel\nStatus: Due'}});
+	});
+
+	test("the new row's number is read after the tab's title, whatever the title holds", async () => {
+		google.appendedTitle = "'a!B7'";
+		const {googleConnector} = await import('./google-connector');
+		const record = (await googleConnector.create(target, {content: 'Item: Travel'}, 'sheet-1Budget-0')).unwrap();
+
+		expect(record.id).toBe('row-1Budget-0-4');
+	});
+
+	test('a header repeated is told apart by its column, and a row written back changes the cell it names', async () => {
+		state.grid = [
+			['Item', 'Status', 'Status'],
+			['Rent', 'Open', 'Closed'],
+		];
+		const {googleConnector} = await import('./google-connector');
+		const row = (await googleConnector.get(target, 'row-1Budget-0-2')).unwrap();
+		expect(row.values.content).toBe('Item: Rent\nStatus: Open\nStatus (C): Closed');
+
+		await googleConnector.update(target, 'row-1Budget-0-2', {content: 'Item: Rent\nStatus: Open\nStatus (C): Done'});
+		expect(JSON.parse(writes()[0]?.body ?? '').data).toEqual([{range: "'Q1'!C2", majorDimension: 'ROWS', values: [['Done']]}]);
 	});
 
 	test('a row naming a header the tab lacks is turned down before anything is written', async () => {
@@ -315,7 +367,7 @@ describe('editing files', () => {
 			'PATCH',
 			'/upload/drive/v3/files/1Plan',
 			'media',
-			'text/markdown',
+			'text/markdown; charset=UTF-8',
 			'# Launch plan\n\n- Shipped',
 		]);
 		expect(record.values.content).toBe('# Launch plan\n\n- Shipped');
@@ -339,6 +391,20 @@ describe('editing files', () => {
 			'The places at the top and shared drives aren’t changed here, only what is in them',
 		]);
 		expect(writes()).toEqual([]);
+	});
+
+	test('a rename leaves the content alone when it is as it read, however it reads now', async () => {
+		const {googleConnector} = await import('./google-connector');
+		const before = (await googleConnector.get(target, '1Plan')).unwrap();
+		const plan = state.files['1Plan'];
+		if (plan) {
+			plan.content = '# Launch plan\n\n- Shipped, by someone else meanwhile';
+		}
+		google.requests = [];
+		await googleConnector.update(target, '1Plan', {...before.values, name: 'Plan'}, before);
+
+		expect(writes().map((request) => [request.method, request.url.pathname])).toEqual([['PATCH', '/drive/v3/files/1Plan']]);
+		expect(state.files['1Plan']?.content).toBe('# Launch plan\n\n- Shipped, by someone else meanwhile');
 	});
 
 	test('a row changes only in the cells written differently, a cell written empty cleared', async () => {

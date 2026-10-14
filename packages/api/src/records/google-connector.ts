@@ -65,7 +65,7 @@ export const googleConnector: Connector = {
 	list: (target, query) => connectorOf(target).list(target, query),
 	get: (target, recordId) => connectorOf(target).get(target, recordId),
 	create: (target, values, parent) => connectorOf(target).create(target, values, parent),
-	update: (target, recordId, values) => connectorOf(target).update(target, recordId, values),
+	update: (target, recordId, values, before) => connectorOf(target).update(target, recordId, values, before),
 	remove: (target, recordId) => connectorOf(target).remove(target, recordId),
 	commands,
 	newCommands,

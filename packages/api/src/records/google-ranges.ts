@@ -46,20 +46,27 @@ const A1 = new RegExp(String.raw`^(?:${TAB}!)?${CELL}(?::${CELL})?$|^${TAB}$`);
 function requireRange(values: RecordValues): Result<string, ApiError> {
 	const range = (values.range ?? '').trim();
 	if (!A1.test(range)) {
-		return Err(ApiErr.validationError(`Write the range in A1 notation with its tab, such as 'Sheet1'!A1:F20, not “${range}”`));
+		return Err(ApiErr.validationError(`Write the range in A1 notation, such as 'Sheet1'!A1:F20, or A1:F20 in the first tab, not “${range}”`));
 	}
 	return Ok(range);
 }
+
+// The rows a range answers at most, as a database's query answers 200: a whole tab can be far more
+// than an agent can take in at once.
+const MAX_ROWS = 1000;
 
 function rowsText(count: number): string {
 	if (count === 0) {
 		return 'No rows';
 	}
+	if (count > MAX_ROWS) {
+		return `The first ${MAX_ROWS} of ${count} rows: read the rest as a range starting below them`;
+	}
 	return `${count} ${count === 1 ? 'row' : 'rows'}`;
 }
 
 function rangeRecord(spreadsheet: string, range: string, values: string[][]): DataRecord {
-	return {id: 'range', values: {spreadsheet, range, rows: rowsText(values.length), result: csvOf(values)}, updatedAt: new Date().toISOString()};
+	return {id: 'range', values: {spreadsheet, range, rows: rowsText(values.length), result: csvOf(values.slice(0, MAX_ROWS))}, updatedAt: new Date().toISOString()};
 }
 
 /** A range's values, as CSV in `result`. */
@@ -78,7 +85,7 @@ const write: NewCommandRunner = (target, values) =>
 		const range = $(requireRange(values));
 		const rows = $(parseCsv(values.values ?? ''));
 		if (rows.length === 0) {
-			return $(Err(ApiErr.validationError('Write the values as CSV, one row a line')));
+			return $(Err(ApiErr.validationError('Write the values as CSV, one row a line; "" empties a cell')));
 		}
 		const answer = $(await callGoogle(target.connection, (token) => putValues(token, spreadsheet, range, rows)));
 		return rangeRecord(spreadsheet, answer.range, answer.values);
