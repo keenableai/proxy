@@ -127,9 +127,21 @@ function ServerNeeds({need}: {need: Need}) {
 }
 
 // Why a sign-in sent back to the catalog with `?error=` didn't go through: the server lacking what
-// the integration needs, said as the catalog's row says it, or the sign-in not finishing.
-export function SignInFailed({error, className}: {error: string | null; className?: string}) {
+// the integration needs, said as the catalog's row says it, unless it has it by now, or the
+// sign-in not finishing.
+export function SignInFailed({
+	error,
+	configured,
+	className,
+}: {
+	error: string | null;
+	configured: Configured;
+	className?: string;
+}) {
 	const unmet = unmetNeed(error);
+	if (unmet && configured[unmet]) {
+		return null;
+	}
 	if (unmet) {
 		return (
 			<p className={cn('text-sm text-destructive', className)}>

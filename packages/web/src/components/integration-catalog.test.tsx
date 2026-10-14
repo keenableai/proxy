@@ -67,7 +67,7 @@ describe('IntegrationCatalog', () => {
 
 describe('SignInFailed', () => {
 	test('a sign-in that could not start says what the server is missing', () => {
-		render(<SignInFailed error="google-unconfigured" />);
+		render(<SignInFailed error="google-unconfigured" configured={{google: false}} />);
 
 		expect(screen.getByText(/Needs/).textContent).toBe(
 			'Needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on the server. See the docs.',
@@ -75,8 +75,16 @@ describe('SignInFailed', () => {
 		expect(screen.getByRole('link', {name: 'the docs'}).getAttribute('href')).toBe(GOOGLE_DOCS);
 	});
 
+	test('says nothing of what the server was missing once it has it', () => {
+		const {container} = render(
+			<SignInFailed error="google-unconfigured" configured={{google: true}} />,
+		);
+
+		expect(container.textContent).toBe('');
+	});
+
 	test('a sign-in that failed says to try again', () => {
-		render(<SignInFailed error="google" />);
+		render(<SignInFailed error="google" configured={{google: true}} />);
 
 		expect(screen.getByText('Signing in to Google didn’t finish. Try again.')).toBeDefined();
 	});

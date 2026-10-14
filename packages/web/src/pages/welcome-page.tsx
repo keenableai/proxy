@@ -169,7 +169,7 @@ function ConnectionsStep({
 				Add an account, then choose what {agentName} may do with it. The rest can be connected
 				later.
 			</StepHeading>
-			<SignInFailed error={params.get('error')} />
+			<SignInFailed error={params.get('error')} configured={configured} />
 			<IntegrationCatalog
 				connections={connections}
 				configured={configured}
