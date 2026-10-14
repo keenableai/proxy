@@ -7,8 +7,9 @@ import {ApiErr, type ApiError} from '@proxy/utils';
 import type {TokenRefresher} from './token-session';
 
 const updateConnectionCredential = mock();
+const getConnectionCredential = mock();
 
-mock.module('@proxy/db/connection', () => ({updateConnectionCredential}));
+mock.module('@proxy/db/connection', () => ({getConnectionCredential, updateConnectionCredential}));
 
 const warn = mock();
 
@@ -46,6 +47,7 @@ beforeEach(() => {
 	mock.clearAllMocks();
 	refresh.mockResolvedValue(Ok(fresh));
 	updateConnectionCredential.mockResolvedValue(Ok(true));
+	getConnectionCredential.mockResolvedValue(Ok(null));
 	call.mockResolvedValue(Ok('answer'));
 });
 
@@ -86,6 +88,51 @@ describe('callWithToken', () => {
 		expect(refresh).toHaveBeenCalledTimes(1);
 		expect(updateConnectionCredential).toHaveBeenCalledTimes(1);
 		expect(tokensCalledWith()).toEqual(['access-2', 'access-2']);
+	});
+
+	test('a second call in the same request uses the tokens the first one saved, without refreshing again', async () => {
+		let saved: string | null = null;
+		getConnectionCredential.mockImplementation(async () => Ok(saved));
+		updateConnectionCredential.mockImplementation(async ({credential}: {credential: string}) => {
+			saved = credential;
+			return Ok(true);
+		});
+		const {callWithToken} = await import('./token-session');
+		const connection = connectionWith(true);
+		await callWithToken(REFRESHER, connection, call);
+		await callWithToken(REFRESHER, connection, call);
+
+		expect(refresh).toHaveBeenCalledTimes(1);
+		expect(tokensCalledWith()).toEqual(['access-2', 'access-2']);
+	});
+
+	test('uses the tokens another server saved since, without refreshing', async () => {
+		getConnectionCredential.mockResolvedValue(Ok(`enc:${JSON.stringify(fresh)}`));
+		const {callWithToken} = await import('./token-session');
+		await callWithToken(REFRESHER, connectionWith(true), call);
+
+		expect(refresh).not.toHaveBeenCalled();
+		expect(updateConnectionCredential).not.toHaveBeenCalled();
+		expect(tokensCalledWith()).toEqual(['access-2']);
+	});
+
+	test('refreshes the tokens saved since when they are running out too, saving over them', async () => {
+		const saved = `enc:${JSON.stringify({accessToken: 'access-3', expiring: true})}`;
+		getConnectionCredential.mockResolvedValue(Ok(saved));
+		const {callWithToken} = await import('./token-session');
+		await callWithToken(REFRESHER, connectionWith(true), call);
+
+		expect(refresh.mock.calls.map(([credential]) => credential.accessToken)).toEqual(['access-3']);
+		expect(updateConnectionCredential).toHaveBeenCalledWith({connectionId: 'conn-1', credential: `enc:${JSON.stringify(fresh)}`, previous: saved});
+	});
+
+	test('a refresh turned down goes on with the tokens another server saved meanwhile', async () => {
+		getConnectionCredential.mockResolvedValueOnce(Ok(null)).mockResolvedValueOnce(Ok(`enc:${JSON.stringify(fresh)}`));
+		refresh.mockResolvedValue(Err(ApiErr.credentialsRejected()));
+		const {callWithToken} = await import('./token-session');
+		expect((await callWithToken(REFRESHER, connectionWith(true), call)).unwrap()).toBe('answer');
+
+		expect(tokensCalledWith()).toEqual(['access-2']);
 	});
 
 	test('refreshes once when the provider turns the credential down, then gives up', async () => {
