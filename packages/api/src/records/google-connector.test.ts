@@ -322,6 +322,16 @@ describe('googleConnector.list', () => {
 		expect(second.nextPage).toBeNull();
 	});
 
+	test("a page of rows past the tab's last row is empty, without asking Sheets for a range outside its grid", async () => {
+		const {googleConnector} = await import('./google-connector');
+		const page = (await googleConnector.list(target, query({parent: 'sheet-1Budget-0', page: '121'}))).unwrap();
+
+		expect(page.records).toEqual([]);
+		expect(page.nextPage).toBeNull();
+		expect(page.trail?.at(-1)).toEqual({id: 'sheet-1Budget-0', title: 'Q1'});
+		expect(requested('/v4/spreadsheets/1Budget/values:batchGet')).toHaveLength(0);
+	});
+
 	test('a page of rows that is not a row number is refused', async () => {
 		const {googleConnector} = await import('./google-connector');
 		const result = await googleConnector.list(target, query({parent: 'sheet-1Budget-0', page: 'A1'}));
@@ -399,6 +409,14 @@ describe('googleConnector.get', () => {
 
 		expect(requested('/v4/spreadsheets/1Budget/values:batchGet')[0]?.searchParams.getAll('ranges')).toEqual(["'Q1'!A1:ZZ1", "'Q1'!A7:ZZ7"]);
 		expect(record.values).toMatchObject({name: 'Item 7', kind: 'Row', content: 'Item: Item 7\nAmount: 70\nColumn C: Paid'});
+	});
+
+	test("a row past the tab's last row is not found, without asking Sheets for it", async () => {
+		const {googleConnector} = await import('./google-connector');
+		const result = await googleConnector.get(target, 'row-1Budget-0-121');
+
+		expect(result.isErr() && result.error).toMatchObject({kind: 'not_found', resource: 'record', id: 'row-1Budget-0-121'});
+		expect(requested('/v4/spreadsheets/1Budget/values:batchGet')).toHaveLength(0);
 	});
 
 	test('a file too large to export says so', async () => {

@@ -47,7 +47,7 @@ export type SignInRequest = {redirectUri: string; state: string; challenge: stri
 type SignInStart<E> = (request: SignInRequest) => Promise<Result<{url: string; kept: E}, ApiError>>;
 
 /** The provider's answer coming back, with the verifier and what the start kept for it. */
-export type SignInAnswer<E> = {redirectUri: string; code: string; verifier: string; kept: E};
+type SignInAnswer<E> = {redirectUri: string; code: string; verifier: string; kept: E};
 
 /**
  * A connection to save: the account it shows, the provider's own id for it where it gives one,
@@ -58,7 +58,7 @@ export type SignInAnswer<E> = {redirectUri: string; code: string; verifier: stri
 export type Connected<C> = {account: string; accountId?: string; credential: C; defaults: string[]; tools?: McpTool[]; name?: string};
 
 /** A PKCE verifier and the challenge the provider is sent in its place. */
-export function makePkce(): {verifier: string; challenge: string} {
+function makePkce(): {verifier: string; challenge: string} {
 	const verifier = randomBytes(32).toString('base64url');
 	return {verifier, challenge: createHash('sha256').update(verifier).digest('base64url')};
 }

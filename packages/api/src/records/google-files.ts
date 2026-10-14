@@ -303,11 +303,16 @@ function listRows(drive: Drive, ref: {fileId: string; sheetId: number}, query: L
 		const from = Math.max(Number(query.page ?? 2), 2);
 		const to = from + PAGE_SIZE - 1;
 		const {file, sheet} = $(await getSheet(drive, ref.fileId, ref.sheetId));
+		const tab = {id: sheetId(file, sheet), title: sheet.title};
+		// Sheets refuses a range wholly outside the grid, so a page past the tab's last row is empty without asking.
+		if (from > sheet.rowCount) {
+			return {records: [], nextPage: null, trail: [...$(await trailTo(drive, file)), tab]};
+		}
 		const [ranges, trail] = await Promise.all([getRanges(drive.token, file.id, [rowsRange(sheet.title, 1, 1), rowsRange(sheet.title, from, to)]), trailTo(drive, file)]);
 		const [[headers = []] = [], rows = []] = $(ranges);
 		const records = rows.flatMap((cells, index) => (isBlank(cells) ? [] : [rowRecord(file, sheet, headers, from + index, cells)]));
 		const nextPage = $(await nextRowsPage(drive, file.id, sheet, to, rows.length));
-		return {records, nextPage, trail: [...$(trail), {id: sheetId(file, sheet), title: sheet.title}]};
+		return {records, nextPage, trail: [...$(trail), tab]};
 	});
 }
 
@@ -430,6 +435,10 @@ function getRef(drive: Drive, ref: FileRef): Promise<Result<DataRecord, ApiError
 		const {file, sheet} = $(await getSheet(drive, ref.fileId, ref.sheetId));
 		if (ref.kind === 'sheet') {
 			return sheetRecord(file, sheet);
+		}
+		// A row past the tab's last is not there, and Sheets refuses a range outside the grid rather than answering it empty.
+		if (ref.row > sheet.rowCount) {
+			return $(Err(ApiErr.notFound('row')));
 		}
 		const [[headers = []] = [], [cells = []] = []] = $(await getRanges(drive.token, file.id, [rowsRange(sheet.title, 1, 1), rowsRange(sheet.title, ref.row, ref.row)]));
 		if (isBlank(cells)) {
