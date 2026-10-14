@@ -208,12 +208,26 @@ export async function updateConnectionName(data: {
 	});
 }
 
-/** How many connections of an integration are for an account, in every organization. */
-export async function countAccountConnections(data: {
-	integrationId: string;
-	account: string;
-}): Promise<Result<number, ApiError>> {
-	return wrapDb(() => db.connection.count({where: data}));
+/**
+ * How many connections, in every organization, are for the same account as this one, itself
+ * included: those with the provider's id for it, or with its address, as one connected before ids
+ * were kept is known by. Zero once the connection is gone.
+ */
+export async function countSameAccountConnections(
+	connectionId: string,
+): Promise<Result<number, ApiError>> {
+	return wrapDb(async () => {
+		const connection = await db.connection.findUnique({
+			where: {id: connectionId},
+			select: {integrationId: true, account: true, providerAccountId: true},
+		});
+		if (!connection) {
+			return 0;
+		}
+		const {integrationId, account, providerAccountId} = connection;
+		const same = providerAccountId === null ? [{account}] : [{providerAccountId}, {account}];
+		return db.connection.count({where: {integrationId, OR: same}});
+	});
 }
 
 /** `Ok(false)` means no such connection in the organization. Its defaults go with it. */
