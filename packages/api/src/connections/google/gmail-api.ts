@@ -26,7 +26,7 @@ const DRAFTS_PAGE_SIZE = 500;
 export const GMAIL_ID = /^[A-Za-z0-9_-]+$/;
 
 /** The headers a list reads of each message. */
-const LIST_HEADERS = ['Subject', 'From', 'To', 'Cc', 'Date'];
+const LIST_HEADERS = ['Subject', 'From', 'To'];
 
 const headerSchema = z.object({name: z.string(), value: z.string()});
 
@@ -220,7 +220,6 @@ function tagText(name: string, closing: boolean): string {
  * length whatever its HTML looks like, unclosed tags and all.
  */
 export function htmlToText(html: string): string {
-	const lower = html.toLowerCase();
 	const parts: string[] = [];
 	// The link being read: its address, and where its text starts among the parts.
 	let link: {href: string; start: number} | null = null;
@@ -228,10 +227,10 @@ export function htmlToText(html: string): string {
 	while (at < html.length) {
 		const open = html.indexOf('<', at);
 		if (open === -1) {
-			parts.push(html.slice(at));
+			parts.push(sourceText(html.slice(at)));
 			break;
 		}
-		parts.push(html.slice(at, open));
+		parts.push(sourceText(html.slice(at, open)));
 		// A < that starts no tag, as in "1 < 2", is text.
 		if (!/[a-z/!?]/i.test(html.charAt(open + 1))) {
 			parts.push('<');
@@ -245,7 +244,7 @@ export function htmlToText(html: string): string {
 		}
 		const close = html.indexOf('>', open);
 		if (close === -1) {
-			parts.push(html.slice(open));
+			parts.push(sourceText(html.slice(open)));
 			break;
 		}
 		const tag = html.slice(open, close + 1);
@@ -254,7 +253,7 @@ export function htmlToText(html: string): string {
 		const name = rawName.toLowerCase();
 		const closing = slash === '/';
 		if (!closing && HIDDEN.includes(name)) {
-			const end = lower.indexOf(`</${name}`, at);
+			const end = indexOfTag(html, `</${name}`, at);
 			const endClose = end === -1 ? -1 : html.indexOf('>', end);
 			at = endClose === -1 ? html.length : endClose + 1;
 			continue;
@@ -279,6 +278,19 @@ export function htmlToText(html: string): string {
 		.trim();
 }
 
+// Text between tags: a line break in the HTML's source is a space, as a browser shows it.
+function sourceText(text: string): string {
+	return text.replace(/\r\n?|\n/g, ' ');
+}
+
+// Where a tag next starts from `from`, whatever its case. The email isn't lowercased whole to look,
+// since a letter can lowercase to more than one, as İ does, which would move everything after it.
+function indexOfTag(html: string, tag: string, from: number): number {
+	const pattern = new RegExp(tag, 'ig');
+	pattern.lastIndex = from;
+	return pattern.exec(html)?.index ?? -1;
+}
+
 /** A message's HTML part, as its sender wrote it, or null for one without. */
 export function messageHtml(payload: MessagePart | undefined): string | null {
 	const html = payload ? findText(payload, 'text/html') : null;
@@ -292,7 +304,7 @@ export function messageBody(payload: MessagePart | undefined): string {
 	}
 	const plain = findText(payload, 'text/plain');
 	const html = plain ? null : findText(payload, 'text/html');
-	const text = plain ? decodePart(plain).trim() : html ? htmlToText(decodePart(html)) : '';
+	const text = plain ? decodePart(plain).replace(/\r\n?/g, '\n').trim() : html ? htmlToText(decodePart(html)) : '';
 	const attachments = attachmentNames(payload);
 	if (attachments.length === 0) {
 		return text;

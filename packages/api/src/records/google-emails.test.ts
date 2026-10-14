@@ -179,7 +179,7 @@ describe('list', () => {
 
 		const [list] = calls('GET', '/messages');
 		expect(Object.fromEntries(list?.url.searchParams ?? [])).toEqual({maxResults: '50', labelIds: 'INBOX', q: 'from:sam', pageToken: 'page-1'});
-		expect(calls('GET', '/messages/m1')[0]?.url.searchParams.getAll('metadataHeaders')).toEqual(['Subject', 'From', 'To', 'Cc', 'Date']);
+		expect(calls('GET', '/messages/m1')[0]?.url.searchParams.getAll('metadataHeaders')).toEqual(['Subject', 'From', 'To']);
 		expect(calls('GET', '/messages/m1')[0]?.url.searchParams.get('format')).toBe('metadata');
 		expect(page.nextPage).toBe('page-2');
 		expect(page.records[0]).toEqual({

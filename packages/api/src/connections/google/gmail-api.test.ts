@@ -89,6 +89,16 @@ describe('messageBody', () => {
 	test('a message without parts is empty', () => {
 		expect(messageBody(undefined)).toBe('');
 	});
+
+	test("a part's line endings read as new lines in text, and as spaces in HTML", () => {
+		expect(messageBody(textPart('text/plain', 'Hi Alex,\r\n\r\nSee you Friday.\r\n'))).toBe('Hi Alex,\n\nSee you Friday.');
+		expect(messageBody(textPart('text/html', '<p>Hi\r\nAlex,</p>\r\n<p>See you\nFriday.</p>'))).toBe('Hi Alex,\nSee you Friday.');
+	});
+});
+
+test('htmlToText finds the end of a hidden element after a letter that lowercases to two', () => {
+	expect(htmlToText('<p>İstanbul</p><STYLE>p {}</STYLE><p>after</p>')).toBe('İstanbul\nafter');
+	expect(htmlToText(`<p>${'İ'.repeat(12)} before</p><style>a > b {}</style><p>after</p><p>more</p>`)).toBe(`${'İ'.repeat(12)} before\nafter\nmore`);
 });
 
 test('htmlToText decodes entities only once the tags are gone', () => {
