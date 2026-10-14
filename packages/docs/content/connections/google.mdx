@@ -121,8 +121,8 @@ used to train a model.
 
 - **Read files** browses and searches Drive and opens files. At the top are four places: My Drive,
   Shared with me, Shared drives and Recent. My Drive, folders and shared drives list their files
-  folders first, Shared with me the last shared first, and Recent the last opened first, 50 to a
-  page; trashed files are never listed. A search looks for words in
+  folders first, Shared with me the last shared first, and Recent the files the account opened,
+  in shared drives too, the last opened first, 50 to a page; trashed files are never listed. A search looks for words in
   file names and contents, anywhere in Drive, or among the files in the folder opened. A document
   opens as Markdown and a presentation as text, as Google exports them, up to Google's limit of
   10 MB. A spreadsheet opens into its tabs, and a tab into its rows, 50 to a page, each row's
@@ -143,6 +143,9 @@ sign-in will be needed.
 - **A connection stops working a week after connecting**, and agents are told "The provider turned
   this connection's sign-in down": the app was in **Testing**. Publish it, then sign in with Google
   again with the same account.
+- **Connecting fails, and the api's log shows `invalid_client`** in Google's answer: the client
+  secret doesn't belong to the client. Copy both again from the client's page into
+  `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 - **A run answers that an API "has not been used in project … before or it is disabled"**: enable
   that API from the link in the message, then try again a few minutes later.
 - **`org_internal`**: the client's user type is **Internal**, and the account isn't in the Google
@@ -152,6 +155,8 @@ sign-in will be needed.
 
 ## Disconnecting
 
-Deleting the connection revokes its tokens at Google. The person can also revoke Personal Agent
-Proxy's access from their Google account, at
+Deleting the connection revokes its tokens at Google. Google's grant is the account's for the
+whole client, so while another connection is for the same Google account, in any organization on
+the same Personal Agent Proxy, it is kept, and that connection goes on working. The person can also
+revoke Personal Agent Proxy's access from their Google account, at
 [Third-party apps & services](https://myaccount.google.com/permissions).
