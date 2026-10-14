@@ -52,6 +52,9 @@ const FOLDER_ORDER = 'folder,modifiedTime desc';
 // How far up the folders a trail goes before it stops looking.
 const MAX_DEPTH = 10;
 
+// Rows looked through past a page of rows that came back short, for the next one holding anything.
+const LOOKAHEAD_ROWS = 1000;
+
 /**
  * What a record id names: a place, a shared drive (`drive-<id>`), a Drive file by its own id, a
  * spreadsheet's tab (`sheet-<file>-<tab>`), or a row of one (`row-<file>-<tab>-<row>`, its number
@@ -197,7 +200,7 @@ function getSheet(drive: Drive, fileId: string, id: number): Promise<Result<{fil
  * The records above a file, from the top: where it is, then its folders, the nearest last. Drive
  * gives each file the folder it is in; walking up stops at My Drive, at the top of a shared drive
  * (whose folder has the drive's own id), or where the account can't see further up, as with a
- * folder someone shared, which is then under Shared with me. Past 10 folders it stops looking, and
+ * folder someone shared, or a shared drive it isn't a member of, which is then under Shared with me. Past 10 folders it stops looking, and
  * the trail starts at the 10th.
  */
 function crumbsAbove(drive: Drive, file: FileParents): Promise<Result<Crumb[], ApiError>> {
@@ -214,8 +217,13 @@ function crumbsAbove(drive: Drive, file: FileParents): Promise<Result<Crumb[], A
 				return [{id: MY_DRIVE.id, title: MY_DRIVE.name}, ...folders];
 			}
 			if (parentId === sharedDriveId) {
-				const shared = $(await getSharedDrive(drive.token, sharedDriveId));
-				return [{id: SHARED_DRIVES.id, title: SHARED_DRIVES.name}, {id: `drive-${shared.id}`, title: shared.name}, ...folders];
+				// A shared drive the account isn't a member of, which someone shared a file from.
+				const shared = await getSharedDrive(drive.token, sharedDriveId);
+				if (shared.isErr() && shared.error.kind === 'not_found') {
+					return [{id: SHARED_WITH_ME.id, title: SHARED_WITH_ME.name}, ...folders];
+				}
+				const {id, name} = $(shared);
+				return [{id: SHARED_DRIVES.id, title: SHARED_DRIVES.name}, {id: `drive-${id}`, title: name}, ...folders];
 			}
 			const parent = await getFileParents(drive.token, parentId);
 			if (parent.isErr() && parent.error.kind === 'not_found') {
@@ -262,7 +270,9 @@ function listPlace(drive: Drive, place: Place, query: ListQuery): Promise<Result
 			return {...$(await filesPage(drive, query, {terms: ['sharedWithMe=true'], order: 'sharedWithMeTime desc'})), trail};
 		}
 		if (place.id === 'recent') {
-			return {...$(await filesPage(drive, query, {terms: [], order: 'viewedByMeTime desc'})), trail};
+			// As Drive's own Recent: files the account opened, last first, shared drives' too.
+			const terms = ["viewedByMeTime > '1970-01-01T00:00:00'", `mimeType != '${MIME_TYPES.folder}'`];
+			return {...$(await filesPage(drive, query, {terms, order: 'viewedByMeTime desc', params: {corpora: 'allDrives'}})), trail};
 		}
 		// Shared drives are searched by their names.
 		const drives = $(await listSharedDrives(drive.token, query.search, query.page));
@@ -296,9 +306,31 @@ function listRows(drive: Drive, ref: {fileId: string; sheetId: number}, query: L
 		const [ranges, trail] = await Promise.all([getRanges(drive.token, file.id, [rowsRange(sheet.title, 1, 1), rowsRange(sheet.title, from, to)]), trailTo(drive, file)]);
 		const [[headers = []] = [], rows = []] = $(ranges);
 		const records = rows.flatMap((cells, index) => (isBlank(cells) ? [] : [rowRecord(file, sheet, headers, from + index, cells)]));
-		// Sheets leaves out the empty rows at the end, so a page short of 50 is the last.
-		const more = rows.length === PAGE_SIZE && to < sheet.rowCount;
-		return {records, nextPage: more ? String(to + 1) : null, trail: [...$(trail), {id: sheetId(file, sheet), title: sheet.title}]};
+		const nextPage = $(await nextRowsPage(drive, file.id, sheet, to, rows.length));
+		return {records, nextPage, trail: [...$(trail), {id: sheetId(file, sheet), title: sheet.title}]};
+	});
+}
+
+/**
+ * Where the page after rows up to `to` starts. Sheets leaves out the empty rows at the end of each
+ * range asked for, so a page short of 50 may only have ended in empty rows: the rows after it are
+ * looked through for the next that isn't, 1000 at a time.
+ */
+function nextRowsPage(drive: Drive, fileId: string, sheet: Sheet, to: number, read: number): Promise<Result<string | null, ApiError>> {
+	return Do(async ($) => {
+		if (to >= sheet.rowCount) {
+			return null;
+		}
+		if (read === PAGE_SIZE) {
+			return String(to + 1);
+		}
+		const end = Math.min(sheet.rowCount, to + LOOKAHEAD_ROWS);
+		const [after = []] = $(await getRanges(drive.token, fileId, [rowsRange(sheet.title, to + 1, end)]));
+		const next = after.findIndex((cells) => !isBlank(cells));
+		if (next !== -1) {
+			return String(to + 1 + next);
+		}
+		return end < sheet.rowCount ? String(end + 1) : null;
 	});
 }
 

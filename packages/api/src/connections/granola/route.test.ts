@@ -133,7 +133,7 @@ describe('handleGranolaCallbackRoute', () => {
 
 		expect(createConnection).not.toHaveBeenCalled();
 		expect(updateConnectionCredential.mock.calls[0]?.[0]).toMatchObject({connectionId: 'conn-old'});
-		expect(res.redirect).toHaveBeenCalledWith('https://app.example.com/connections/conn-old?added');
+		expect(res.redirect).toHaveBeenCalledWith('https://app.example.com/connections/conn-old');
 	});
 
 	test('a state that does not match, or another user, connects nothing', async () => {

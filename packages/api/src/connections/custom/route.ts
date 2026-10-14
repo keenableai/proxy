@@ -78,7 +78,7 @@ function connectCustomMcp(request: AuthenticatedRequest, res: Response): Promise
 		}
 		const credential: CustomCredential = token === null ? {auth: 'none', url: url.toString()} : {auth: 'token', url: url.toString(), token};
 		const orgId = $(await requireUserOrgId(request));
-		const row = $(await saveConnection(orgId, 'mcp', {account: mcpAccount(url), credential, defaults: readOnlyToolNames(probe.tools), tools: probe.tools, name: body.name}));
+		const {row} = $(await saveConnection(orgId, 'mcp', {account: mcpAccount(url), credential, defaults: readOnlyToolNames(probe.tools), tools: probe.tools, name: body.name}));
 		return {kind: 'connected' as const, connection: toConnectionResponse(row)};
 	});
 }

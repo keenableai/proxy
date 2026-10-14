@@ -4,7 +4,7 @@ import {Ok, type Result} from 'ts-results-es';
 import type {ApiError} from '@proxy/utils';
 import {findCollection, findIntegration, type Collection} from '@proxy/integrations';
 
-mock.module('@proxy/db/connection', () => ({updateConnectionCredential: mock()}));
+mock.module('@proxy/db/connection', () => ({updateConnectionCredential: mock(), getConnectionCredential: mock(async () => Ok(null))}));
 
 mock.module('../observability/log', () => ({
 	log: {debug: mock(), info: mock(), warn: mock(), error: mock()},
@@ -86,15 +86,26 @@ const SHEETS = {
 	],
 };
 
-function rows(from: number, count: number): string[][] {
-	return Array.from({length: count}, (_, index) => [`Item ${from + index}`, String((from + index) * 10), index === 0 ? 'Paid' : '']);
+// The rows of a tab as Google keeps them, by number; a row without any is empty.
+function storedRow(row: number): string[] | null {
+	if (row < 2 || row > 54) {
+		return null;
+	}
+	return [`Item ${row}`, String(row * 10), row % 5 === 2 ? 'Paid' : ''];
+}
+
+// A range's rows as Sheets answers them: the empty ones at its end left out.
+function rowsBetween(from: number, to: number): string[][] {
+	const all = Array.from({length: to - from + 1}, (_, index) => drive.row(from + index));
+	const last = all.findLastIndex((row) => row !== null);
+	return all.slice(0, last + 1).map((row) => row ?? []);
 }
 
 function googleError(status: number, message: string, reason: string): Response {
 	return Response.json({error: {code: status, message, errors: [{message, domain: 'global', reason}]}}, {status});
 }
 
-const drive = {requests: [] as URL[], answer: (_url: URL): Response | null => null};
+const drive = {requests: [] as URL[], answer: (_url: URL): Response | null => null, row: storedRow};
 
 function answer(url: URL): Response {
 	const custom = drive.answer(url);
@@ -122,16 +133,12 @@ function answer(url: URL): Response {
 		return Response.json(SHEETS);
 	}
 	if (path === '/v4/spreadsheets/1Budget/values:batchGet') {
-		const [header, range] = url.searchParams.getAll('ranges');
-		const [, from = '2', to = '2'] = /!A(\d+):ZZ(\d+)$/.exec(range ?? '') ?? [];
-		const count = Number(from) === 52 ? 3 : Number(to) - Number(from) + 1;
-		return Response.json({
-			spreadsheetId: '1Budget',
-			valueRanges: [
-				{range: header, majorDimension: 'ROWS', values: [['Item', 'Amount', '']]},
-				{range, majorDimension: 'ROWS', values: rows(Number(from), count)},
-			],
+		const valueRanges = url.searchParams.getAll('ranges').map((range) => {
+			const [, from = '1', to = '1'] = /!A(\d+):ZZ(\d+)$/.exec(range) ?? [];
+			const values = from === '1' ? [['Item', 'Amount', '']] : rowsBetween(Number(from), Number(to));
+			return {range, majorDimension: 'ROWS', ...(values.length > 0 ? {values} : {})};
 		});
+		return Response.json({spreadsheetId: '1Budget', valueRanges});
 	}
 	return googleError(404, 'Not found', 'notFound');
 }
@@ -149,6 +156,7 @@ function requested(path: string): URL[] {
 beforeEach(() => {
 	drive.requests = [];
 	drive.answer = () => null;
+	drive.row = storedRow;
 });
 
 describe('googleConnector.list', () => {
@@ -212,8 +220,9 @@ describe('googleConnector.list', () => {
 		expect(requested('/drive/v3/files').map((url) => [url.searchParams.get('q'), url.searchParams.get('orderBy')])).toEqual([
 			["'root' in parents and trashed=false", 'folder,modifiedTime desc'],
 			['sharedWithMe=true and trashed=false', 'sharedWithMeTime desc'],
-			['trashed=false', 'viewedByMeTime desc'],
+			["viewedByMeTime > '1970-01-01T00:00:00' and mimeType != 'application/vnd.google-apps.folder' and trashed=false", 'viewedByMeTime desc'],
 		]);
+		expect(requested('/drive/v3/files')[2]?.searchParams.get('corpora')).toBe('allDrives');
 		expect(recent.trail).toEqual([{id: 'recent', title: 'Recent'}]);
 	});
 
@@ -298,6 +307,19 @@ describe('googleConnector.list', () => {
 		const last = (await googleConnector.list(target, query({parent: 'sheet-1Budget-1834', page: '52'}))).unwrap();
 		expect(last.records.map((record) => record.id)).toEqual(['row-1Budget-1834-52', 'row-1Budget-1834-53', 'row-1Budget-1834-54']);
 		expect(last.nextPage).toBeNull();
+		expect(requested('/v4/spreadsheets/1Budget/values:batchGet').at(-1)?.searchParams.getAll('ranges')).toEqual(["'Alex''s notes'!A102:ZZ1000"]);
+	});
+
+	test('a page of rows ending in empty ones goes on at the next row that has any', async () => {
+		drive.row = (row) => (row <= 40 || (row >= 75 && row <= 80) ? storedRow(Math.min(row, 54)) : null);
+		const {googleConnector} = await import('./google-connector');
+		const first = (await googleConnector.list(target, query({parent: 'sheet-1Budget-0'}))).unwrap();
+
+		expect(first.records).toHaveLength(39);
+		expect(first.nextPage).toBe('75');
+		const second = (await googleConnector.list(target, query({parent: 'sheet-1Budget-0', page: '75'}))).unwrap();
+		expect(second.records).toHaveLength(6);
+		expect(second.nextPage).toBeNull();
 	});
 
 	test('a page of rows that is not a row number is refused', async () => {
@@ -322,6 +344,25 @@ describe('googleConnector.list', () => {
 			{id: '1Shared', title: 'Shared plans'},
 		]);
 	});
+});
+
+test('a file at the top of a shared drive the account is not a member of is under Shared with me', async () => {
+	const {googleConnector} = await import('./google-connector');
+	drive.answer = (url) => {
+		if (url.pathname === '/drive/v3/files/1Theirs') {
+			return Response.json({id: '1Theirs', name: 'Their plans', mimeType: 'application/vnd.google-apps.folder', parents: ['0ATheirDrive'], driveId: '0ATheirDrive'});
+		}
+		if (url.pathname === '/drive/v3/drives/0ATheirDrive') {
+			return googleError(404, 'Shared drive not found: 0ATheirDrive', 'notFound');
+		}
+		return null;
+	};
+	const page = (await googleConnector.list(target, query({parent: '1Theirs'}))).unwrap();
+
+	expect(page.trail).toEqual([
+		{id: 'shared-with-me', title: 'Shared with me'},
+		{id: '1Theirs', title: 'Their plans'},
+	]);
 });
 
 describe('googleConnector.get', () => {

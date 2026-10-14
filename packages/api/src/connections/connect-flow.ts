@@ -63,27 +63,27 @@ export function makePkce(): {verifier: string; challenge: string} {
 
 /**
  * Saves a connection: a new one, or an existing one of the same account given the new credential,
- * and the tools and the name, where it has its own.
+ * and the tools and the name, where it has its own; `added` unless it was already there.
  */
-export function saveConnection<C>(orgId: string, integrationId: IntegrationId, connected: Connected<C>): Promise<Result<ConnectionRow, ApiError>> {
+export function saveConnection<C>(orgId: string, integrationId: IntegrationId, connected: Connected<C>): Promise<Result<{row: ConnectionRow; added: boolean}, ApiError>> {
 	return Do(async ($) => {
 		const encrypted = $(encryptSecret(JSON.stringify(connected.credential)));
 		const existing = $(await listConnections(orgId)).find((connection) => connection.integrationId === integrationId && connection.account === connected.account);
 		const name = connected.name === undefined ? {} : {name: connected.name};
 		if (!existing) {
 			const tools = connected.tools === undefined ? {} : {tools: JSON.stringify(connected.tools)};
-			return $(await createConnection({orgId, integrationId, account: connected.account, credential: encrypted, defaults: connected.defaults, ...tools, ...name}));
+			return {row: $(await createConnection({orgId, integrationId, account: connected.account, credential: encrypted, defaults: connected.defaults, ...tools, ...name})), added: true};
 		}
 		$(await updateConnectionCredential({connectionId: existing.id, credential: encrypted}));
 		if (connected.name !== undefined) {
 			$(await updateConnectionName({connectionId: existing.id, name: connected.name}));
 		}
 		if (connected.tools === undefined) {
-			return {...existing, ...name};
+			return {row: {...existing, ...name}, added: false};
 		}
 		const tools = JSON.stringify(connected.tools);
 		$(await updateConnectionTools({connectionId: existing.id, tools, actions: connected.tools.map((tool) => tool.name)}));
-		return {...existing, tools, ...name};
+		return {row: {...existing, tools, ...name}, added: false};
 	});
 }
 
@@ -155,8 +155,8 @@ export function signInFlow<E, C>(args: SignInArgs<E, C>) {
 	}
 
 	// The handshake the cookie holds, checked against the provider's answer, then the connection
-	// made or given its new tokens.
-	function finishConnect(request: AuthenticatedRequest, appUrl: string, payload: StatePayload): Promise<Result<string, ApiError>> {
+	// made, or given its new tokens when it was already there.
+	function finishConnect(request: AuthenticatedRequest, appUrl: string, payload: StatePayload): Promise<Result<{id: string; added: boolean}, ApiError>> {
 		return Do(async ($) => {
 			const state = queryParam(request, 'state') ?? '';
 			if (!timingSafeEqualString(state, payload.state) || payload.userId !== request.user.userId) {
@@ -170,13 +170,15 @@ export function signInFlow<E, C>(args: SignInArgs<E, C>) {
 
 			const connected = $(await args.finish({redirectUri: redirectUri(appUrl), code, verifier: payload.verifier, kept: payload.kept}));
 			const orgId = $(await requireUserOrgId(request));
-			return $(await saveConnection(orgId, integrationId, connected)).id;
+			const {row, added} = $(await saveConnection(orgId, integrationId, connected));
+			return {id: row.id, added};
 		});
 	}
 
 	/**
 	 * `GET /api/connections/<integration>/callback` — where the sign-in comes back to; lands on the
-	 * connection, saying it was added, or on the welcome flow's page for it when it started there.
+	 * connection, saying it was added unless it was only signed in to again, or on the welcome
+	 * flow's page for it when it started there.
 	 */
 	async function handleCallback(request: AuthenticatedRequest, res: Response): Promise<void> {
 		const appUrl = env.APP_URL;
@@ -189,16 +191,17 @@ export function signInFlow<E, C>(args: SignInArgs<E, C>) {
 		res.clearCookie(stateCookieName, stateCookieOptions());
 		const payload = readStateCookie(request);
 		const returnTo = payload.isOk() ? payload.value.returnTo : undefined;
-		const connectionId = payload.isErr() ? Err(payload.error) : await finishConnect(request, appUrl, payload.value);
-		if (connectionId.isErr()) {
-			redirectToConnectError(res, appUrl, returnTo, connectionId.error);
+		const finished = payload.isErr() ? Err(payload.error) : await finishConnect(request, appUrl, payload.value);
+		if (finished.isErr()) {
+			redirectToConnectError(res, appUrl, returnTo, finished.error);
 			return;
 		}
+		const {id, added} = finished.value;
 		if (returnTo === 'welcome') {
-			res.redirect(`${appUrl}/welcome/connections/${connectionId.value}`);
+			res.redirect(`${appUrl}/welcome/connections/${id}`);
 			return;
 		}
-		res.redirect(`${appUrl}/connections/${connectionId.value}?added`);
+		res.redirect(`${appUrl}/connections/${id}${added ? '?added' : ''}`);
 	}
 
 	return {beginSignIn, handleCallback, redirectToConnectError};

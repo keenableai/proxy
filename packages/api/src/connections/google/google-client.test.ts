@@ -6,7 +6,7 @@ import type {ApiError, FetchError} from '@proxy/utils';
 
 const updateConnectionCredential = mock();
 
-mock.module('@proxy/db/connection', () => ({updateConnectionCredential}));
+mock.module('@proxy/db/connection', () => ({updateConnectionCredential, getConnectionCredential: mock(async () => Ok(null))}));
 
 mock.module('../../observability/log', () => ({
 	log: {debug: mock(), info: mock(), warn: mock(), error: mock()},

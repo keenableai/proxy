@@ -1,4 +1,4 @@
-import {Err, Result} from 'ts-results-es';
+import {Err, Ok, Result} from 'ts-results-es';
 import {z} from 'zod';
 
 import {ApiErr, type ApiError, Do, type FetchError, httpRequest, parseSchema, requirePresent} from '@proxy/utils';
@@ -56,7 +56,7 @@ const tokensSchema = z.object({
 
 type Tokens = z.infer<typeof tokensSchema>;
 
-const idTokenPayloadSchema = z.object({email: z.string().min(1)});
+const idTokenPayloadSchema = z.object({email: z.string().min(1), email_verified: z.boolean().optional()});
 
 /** Google's sign-in page for a connection, coming back to `redirectUri` with `state`. */
 export function googleAuthorizeUrl(client: GoogleClient, args: {redirectUri: string; state: string; challenge: string}): string {
@@ -75,10 +75,13 @@ export function googleAuthorizeUrl(client: GoogleClient, args: {redirectUri: str
 	return url.toString();
 }
 
-// Google turning a token request down is the sign-in revoked or the code spent; anything else is
-// Google out of reach.
+const tokenErrorSchema = z.object({error: z.string()});
+
+// Google answering a token request with `invalid_grant` is the sign-in revoked or the code spent;
+// anything else, such as a wrong client secret (`invalid_client`) or too many requests, keeps
+// Google's answer as its cause, for the logs.
 function tokenError(error: FetchError): ApiError {
-	if (error.kind === 'http' && error.status >= 400 && error.status < 500) {
+	if (error.kind === 'http' && tokenErrorSchema.safeParse(error.body).data?.error === 'invalid_grant') {
 		return ApiErr.credentialsRejected();
 	}
 	return ApiErr.providerUnreachable(error);
@@ -109,11 +112,16 @@ function grantedScopes(tokens: Tokens): string[] | null {
 // (`auth/google.ts`); that saves asking Google's userinfo endpoint for what the token already says.
 function emailOf(idToken: string | undefined): Result<string, ApiError> {
 	const unreadable = (cause: unknown): ApiError => ApiErr.providerUnreachable(cause);
-	return Do<string, ApiError>(($) => {
+	const claims = Do<z.infer<typeof idTokenPayloadSchema>, ApiError>(($) => {
 		const payload = $(requirePresent(idToken?.split('.')[1], unreadable(new Error('Google answered a sign-in without an id_token'))));
 		const json = $(Result.wrap((): unknown => JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))).mapErr(unreadable));
-		const {email} = $(parseSchema(idTokenPayloadSchema, json).mapErr(unreadable));
-		return email.toLowerCase();
+		return $(parseSchema(idTokenPayloadSchema, json).mapErr(unreadable));
+	});
+	return claims.andThen(({email, email_verified: verified}) => {
+		if (verified === false) {
+			return Err(ApiErr.validationError(`Google hasn't verified ${email}`));
+		}
+		return Ok(email.toLowerCase());
 	});
 }
 

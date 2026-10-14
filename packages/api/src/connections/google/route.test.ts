@@ -7,7 +7,7 @@ const listConnections = mock();
 const createConnection = mock();
 const updateConnectionCredential = mock();
 
-mock.module('@proxy/db/connection', () => ({listConnections, createConnection, updateConnectionCredential}));
+mock.module('@proxy/db/connection', () => ({listConnections, createConnection, updateConnectionCredential, getConnectionCredential: mock(async () => Ok(null)), updateConnectionTools: mock(), updateConnectionName: mock()}));
 
 const getUserOrgId = mock();
 
@@ -45,21 +45,28 @@ function base64url(value: object): string {
 	return Buffer.from(JSON.stringify(value)).toString('base64url');
 }
 
-const ID_TOKEN = `${base64url({alg: 'RS256'})}.${base64url({sub: '1093', email: 'Alex@Example.com', email_verified: true})}.signature`;
+function idToken(payload: object): string {
+	return `${base64url({alg: 'RS256'})}.${base64url(payload)}.signature`;
+}
+
+const ID_TOKEN = idToken({sub: '1093', email: 'Alex@Example.com', email_verified: true});
 
 // Google's token endpoint: each request, and its answer. The person unticked Gmail on the consent screen.
-const google = {requests: [] as Array<{url: URL; body: URLSearchParams}>};
+const google = {requests: [] as Array<{url: URL; body: URLSearchParams}>, idToken: ID_TOKEN, refusal: null as object | null};
 
 spyOn(globalThis, 'fetch').mockImplementation((async (input: string | URL | Request, init?: RequestInit) => {
 	const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
 	google.requests.push({url, body: new URLSearchParams(typeof init?.body === 'string' ? init.body : '')});
+	if (google.refusal) {
+		return Response.json(google.refusal, {status: 401});
+	}
 	return Response.json({
 		access_token: 'access-1',
 		refresh_token: 'refresh-1',
 		expires_in: 3599,
 		token_type: 'Bearer',
 		scope: 'openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/documents',
-		id_token: ID_TOKEN,
+		id_token: google.idToken,
 	});
 }) as typeof fetch);
 
@@ -100,6 +107,8 @@ async function callback(args: {cookie: string; query: Record<string, string>}) {
 beforeEach(() => {
 	mock.clearAllMocks();
 	google.requests = [];
+	google.idToken = ID_TOKEN;
+	google.refusal = null;
 	env.GOOGLE_CLIENT_ID = 'client-1.apps.googleusercontent.com';
 	env.GOOGLE_CLIENT_SECRET = 'secret-1';
 	getUserOrgId.mockResolvedValue(Ok('org-1'));
@@ -169,7 +178,24 @@ describe('handleGoogleCallbackRoute', () => {
 
 		expect(createConnection).not.toHaveBeenCalled();
 		expect(updateConnectionCredential.mock.calls[0]?.[0]).toMatchObject({connectionId: 'conn-0'});
-		expect(res.redirect).toHaveBeenCalledWith('https://app.example.com/connections/conn-0?added');
+		expect(res.redirect).toHaveBeenCalledWith('https://app.example.com/connections/conn-0');
+	});
+
+	test('an address Google has not verified is turned down', async () => {
+		google.idToken = idToken({sub: '1093', email: 'alex@example.com', email_verified: false});
+		const {cookie, state} = await start();
+		const res = await callback({cookie: cookie?.value ?? '', query: {state, code: 'code-1'}});
+
+		expect(createConnection).not.toHaveBeenCalled();
+		expect(res.redirect).toHaveBeenCalledWith('https://app.example.com/connections/new?error=google');
+	});
+
+	test("a client Google doesn't know is logged with Google's answer, not taken for a revoked sign-in", async () => {
+		google.refusal = {error: 'invalid_client', error_description: 'The OAuth client was not found.'};
+		const {exchangeGoogleCode} = await import('./google-oauth');
+		const result = await exchangeGoogleCode({clientId: 'client-1', clientSecret: 'wrong'}, {redirectUri: CALLBACK, code: 'code-1', verifier: 'verifier'});
+
+		expect(result.isErr() && result.error).toMatchObject({kind: 'provider_unreachable', cause: {kind: 'http', status: 401, body: {error: 'invalid_client'}}});
 	});
 
 	test('started from the welcome flow, ends on its page for the connection', async () => {

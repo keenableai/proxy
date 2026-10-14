@@ -137,7 +137,7 @@ describe('handleLinearCallbackRoute', () => {
 
 		expect(createConnection).not.toHaveBeenCalled();
 		expect(updateConnectionCredential.mock.calls[0]?.[0]).toMatchObject({connectionId: 'conn-0'});
-		expect(res.redirect).toHaveBeenCalledWith('https://app.example.com/connections/conn-0?added');
+		expect(res.redirect).toHaveBeenCalledWith('https://app.example.com/connections/conn-0');
 	});
 
 	test('a sign-in turned down at Linear goes back to the catalog', async () => {
