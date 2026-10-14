@@ -50,8 +50,3 @@ export function LegalLink({href, children}: {href: string; children: ReactNode})
 		</a>
 	);
 }
-
-// A scope or an address, which can be longer than the column is wide on a phone.
-export function LegalCode({children}: {children: ReactNode}) {
-	return <code className="font-mono break-all text-foreground">{children}</code>;
-}
