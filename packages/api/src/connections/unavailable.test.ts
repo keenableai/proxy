@@ -48,8 +48,8 @@ describe('unavailableActions', () => {
 		const {unavailableActions} = await import('./unavailable');
 
 		const withoutModify = ALL_SCOPES.filter((scope) => !scope.endsWith('/gmail.modify'));
-		expect(unavailableActions(google(withoutModify)).unwrap()).toEqual(['readEmails', 'markEmails', 'flagEmails', 'archiveEmails', 'writeEmails', 'trashEmails']);
-		expect(unavailableActions(google(withoutModify.filter((scope) => !scope.endsWith('/gmail.send')))).unwrap()).toContain('sendEmails');
+		expect(unavailableActions(google(withoutModify))).toEqual(['readEmails', 'markEmails', 'flagEmails', 'archiveEmails', 'writeEmails', 'trashEmails']);
+		expect(unavailableActions(google(withoutModify.filter((scope) => !scope.endsWith('/gmail.send'))))).toContain('sendEmails');
 	});
 
 	test('every other integration covers all its actions, whatever its credential', async () => {

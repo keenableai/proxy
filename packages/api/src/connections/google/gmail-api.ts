@@ -172,39 +172,117 @@ export function attachmentNames(part: MessagePart | undefined): string[] {
 
 const ENTITIES: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' '};
 
+// A character by its number, or the replacement character for one Unicode doesn't have.
+function codePoint(digits: string, radix: number): string {
+	const value = Number.parseInt(digits, radix);
+	if (!Number.isInteger(value) || value < 1 || value > 0x10ffff) {
+		return '\uFFFD';
+	}
+	return String.fromCodePoint(value);
+}
+
 function decodeEntities(text: string): string {
-	return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, name: string) => {
+	return text.replace(/&(#x[0-9a-f]{1,8}|#\d{1,8}|[a-z]{1,32});/gi, (entity, name: string) => {
 		if (name.startsWith('#x') || name.startsWith('#X')) {
-			return String.fromCodePoint(Number.parseInt(name.slice(2), 16));
+			return codePoint(name.slice(2), 16);
 		}
 		if (name.startsWith('#')) {
-			return String.fromCodePoint(Number.parseInt(name.slice(1), 10));
+			return codePoint(name.slice(1), 10);
 		}
 		return ENTITIES[name.toLowerCase()] ?? entity;
 	});
 }
 
+// Elements whose content is never text.
+const HIDDEN = ['script', 'style', 'head', 'title'];
+
+// Elements ending a line where they close.
+const BLOCKS = ['p', 'div', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'table', 'ul', 'ol'];
+
+// What a tag becomes in the text, by its name and whether it closes an element.
+function tagText(name: string, closing: boolean): string {
+	if (name === 'br') {
+		return '\n';
+	}
+	if (name === 'li' && !closing) {
+		return '\n- ';
+	}
+	if (closing && BLOCKS.includes(name)) {
+		return '\n';
+	}
+	return '';
+}
+
 /**
  * HTML as plain text, for an email without a text part: blocks and line breaks as new lines, a
- * link's address after its text where they differ, everything else's tags dropped.
+ * link's address after its text where they differ, everything else's tags dropped. Read in one
+ * pass, each tag found from where the last ended, so the time it takes grows with the email's
+ * length whatever its HTML looks like, unclosed tags and all.
  */
 export function htmlToText(html: string): string {
-	const withoutTags = html
-		.replace(/<(script|style|head|title)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
-		.replace(/<!--[\s\S]*?-->/g, '')
-		.replace(/<a\b[^>]*?href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_match, href: string, text: string) => {
-			const label = text.replace(/<[^>]+>/g, '').trim();
-			return label === '' || label === href ? href : `${label} (${href})`;
-		})
-		.replace(/<br\s*\/?>/gi, '\n')
-		.replace(/<li\b[^>]*>/gi, '\n- ')
-		.replace(/<\/(p|div|tr|h[1-6]|blockquote|table|ul|ol)>/gi, '\n')
-		.replace(/<[^>]+>/g, '');
-	return decodeEntities(withoutTags)
-		.replace(/[ \t ]+/g, ' ')
-		.replace(/ *\n */g, '\n')
+	const lower = html.toLowerCase();
+	const parts: string[] = [];
+	// The link being read: its address, and where its text starts among the parts.
+	let link: {href: string; start: number} | null = null;
+	let at = 0;
+	while (at < html.length) {
+		const open = html.indexOf('<', at);
+		if (open === -1) {
+			parts.push(html.slice(at));
+			break;
+		}
+		parts.push(html.slice(at, open));
+		// A < that starts no tag, as in "1 < 2", is text.
+		if (!/[a-z/!?]/i.test(html.charAt(open + 1))) {
+			parts.push('<');
+			at = open + 1;
+			continue;
+		}
+		if (html.startsWith('<!--', open)) {
+			const end = html.indexOf('-->', open + 4);
+			at = end === -1 ? html.length : end + 3;
+			continue;
+		}
+		const close = html.indexOf('>', open);
+		if (close === -1) {
+			parts.push(html.slice(open));
+			break;
+		}
+		const tag = html.slice(open, close + 1);
+		at = close + 1;
+		const [, slash = '', rawName = ''] = /^<(\/?)([a-z][a-z0-9]*)/i.exec(tag) ?? [];
+		const name = rawName.toLowerCase();
+		const closing = slash === '/';
+		if (!closing && HIDDEN.includes(name)) {
+			const end = lower.indexOf(`</${name}`, at);
+			const endClose = end === -1 ? -1 : html.indexOf('>', end);
+			at = endClose === -1 ? html.length : endClose + 1;
+			continue;
+		}
+		if (name === 'a' && !closing) {
+			const href = /\shref\s*=\s*"([^"]*)"/i.exec(tag)?.[1];
+			link = href === undefined ? null : {href, start: parts.length};
+			continue;
+		}
+		if (name === 'a' && closing && link) {
+			const label = parts.splice(link.start).join('').trim();
+			parts.push(label === '' || label === link.href ? link.href : `${label} (${link.href})`);
+			link = null;
+			continue;
+		}
+		parts.push(tagText(name, closing));
+	}
+	return decodeEntities(parts.join(''))
+		.replace(/[ \t\u00a0]+/g, ' ')
+		.replace(/ ?\n ?/g, '\n')
 		.replace(/\n{3,}/g, '\n\n')
 		.trim();
+}
+
+/** A message's HTML part, as its sender wrote it, or null for one without. */
+export function messageHtml(payload: MessagePart | undefined): string | null {
+	const html = payload ? findText(payload, 'text/html') : null;
+	return html ? decodePart(html) : null;
 }
 
 /** A message's text: its plain text part, else its HTML part as text, then the names of its attachments. */
@@ -279,9 +357,37 @@ export async function findDraftIds(accessToken: string, messageIds: string[]): P
 	return Ok(found);
 }
 
+// Waits before asking again a message Gmail answered busy, or failed on for a moment.
+const RETRY_DELAYS_MS = [250, 1000];
+
+const busySchema = z.object({kind: z.literal('http'), status: z.number().refine((status) => status === 429 || status >= 500)});
+
+function isBusy(error: ApiError): boolean {
+	return error.kind === 'provider_unreachable' && busySchema.safeParse(error.cause).success;
+}
+
+// A call asked again, twice at most, while Gmail answers it is busy, so one of a page's messages
+// turned down in the burst doesn't fail the page.
+async function retried<T>(call: () => Promise<Result<T, ApiError>>): Promise<Result<T, ApiError>> {
+	let result = await call();
+	for (const delay of RETRY_DELAYS_MS) {
+		if (result.isOk() || !isBusy(result.error)) {
+			return result;
+		}
+		await Bun.sleep(delay);
+		result = await call();
+	}
+	return result;
+}
+
 /** A message with what a list shows of it: its labels, date and the headers in `LIST_HEADERS`. */
 function getMessageSummary(accessToken: string, messageId: string): Promise<Result<GmailMessage, ApiError>> {
-	return googleRequest(accessToken, gmailUrl(`/messages/${messageId}`, {format: 'metadata', metadataHeaders: LIST_HEADERS}), messageSchema);
+	return retried(() => googleRequest(accessToken, gmailUrl(`/messages/${messageId}`, {format: 'metadata', metadataHeaders: LIST_HEADERS}), messageSchema));
+}
+
+/** A message's labels alone, to tell a draft from other email. */
+export function getMessageLabels(accessToken: string, messageId: string): Promise<Result<GmailMessage, ApiError>> {
+	return googleRequest(accessToken, gmailUrl(`/messages/${messageId}`, {format: 'minimal'}), messageSchema);
 }
 
 /** The summaries of several messages, at most a few asked for at once, in the order of their ids. */

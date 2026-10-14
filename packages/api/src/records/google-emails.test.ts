@@ -4,7 +4,7 @@ import {Ok, type Result} from 'ts-results-es';
 import type {ApiError} from '@proxy/utils';
 import {findCollection, findIntegration, type Collection} from '@proxy/integrations';
 
-mock.module('@proxy/db/connection', () => ({updateConnectionCredential: mock()}));
+mock.module('@proxy/db/connection', () => ({updateConnectionCredential: mock(), getConnectionCredential: mock(async () => Ok(null))}));
 
 mock.module('../observability/log', () => ({
 	log: {debug: mock(), info: mock(), warn: mock(), error: mock()},
@@ -224,6 +224,29 @@ describe('list', () => {
 		expect(page.nextPage).toBe('drafts-2');
 	});
 
+	test('a message Gmail turns down as busy is asked for again, so the page still lists it', async () => {
+		let busy = 1;
+		gmail.answer = (call) => {
+			if (call.url.pathname.endsWith('/messages/m2') && busy > 0) {
+				busy -= 1;
+				return Response.json({error: {code: 429, message: 'Too many concurrent requests for user.', errors: [{reason: 'rateLimitExceeded'}]}}, {status: 429});
+			}
+			return null;
+		};
+		const page = (await (await connector()).list(target, query())).unwrap();
+
+		expect(page.records.map((record) => record.id)).toEqual(['m1', 'm2', 'draft-r1']);
+		expect(calls('GET', '/messages/m2')).toHaveLength(2);
+	});
+
+	test('a draft moved to Trash is not looked for among the drafts', async () => {
+		gmail.messages.m3 = {...message('m3', ['DRAFT', 'TRASH'], {Subject: 'Offer'}), threadId: 'thread-m3'};
+		const page = (await (await connector()).list(target, query({filter: 'Trash'}))).unwrap();
+
+		expect(page.records.find((record) => record.id === 'm3')?.values.folder).toBe('Trash');
+		expect(calls('GET', '/drafts')).toEqual([]);
+	});
+
 	test('the last page has no next one, and an email gone before it was read is left out', async () => {
 		gmail.answer = (call) => (call.url.pathname.endsWith('/messages') ? Response.json({messages: [{id: 'm1'}, {id: 'gone'}]}) : null);
 		const page = (await (await connector()).list(target, query({page: 'page-2'}))).unwrap();
@@ -297,6 +320,28 @@ describe('drafts', () => {
 		expect(record.id).toBe('draft-r1');
 	});
 
+	test('an edit with every field, as the agent side sends one, keeps the names and the HTML of what is unchanged', async () => {
+		const m3 = gmail.messages.m3;
+		m3?.payload.parts?.push(html('<p>Draft <b>text</b></p>'));
+		await (await connector()).update(target, 'draft-r1', {to: 'robin@example.com', subject: 'Offer, revised', body: 'Draft text'});
+
+		const raw = rawText((calls('PUT', '/drafts/r1')[0]?.body as {message: Record<string, unknown>}).message);
+		expect(raw).toContain('To: Robin <robin@example.com>');
+		expect(raw).toContain('Content-Type: text/html');
+		expect(raw).toContain('<p>Draft <b>text</b></p>');
+	});
+
+	test('an edit to the text writes it as text alone, and to the recipients as written', async () => {
+		const m3 = gmail.messages.m3;
+		m3?.payload.parts?.push(html('<p>Draft <b>text</b></p>'));
+		await (await connector()).update(target, 'draft-r1', {to: 'sam@example.com', subject: 'Offer', body: 'New text'});
+
+		const raw = rawText((calls('PUT', '/drafts/r1')[0]?.body as {message: Record<string, unknown>}).message);
+		expect(raw).toContain('To: sam@example.com');
+		expect(raw).toContain('New text');
+		expect(raw).not.toContain('text/html');
+	});
+
 	test('a draft with attachments isn’t edited, and an email that isn’t a draft never is', async () => {
 		const c = await connector();
 		const m3 = gmail.messages.m3;
@@ -356,6 +401,14 @@ describe('commands', () => {
 
 		expect(sent?.unwrap()).toBeNull();
 		expect(calls('POST', '/drafts/send')[0]?.body).toEqual({id: 'r1'});
+	});
+
+	test('a draft named by its message id is sent by its draft id', async () => {
+		const sent = await (await connector()).commands?.send?.(target, 'm3');
+
+		expect(sent?.unwrap()).toBeNull();
+		expect(calls('POST', '/drafts/send')[0]?.body).toEqual({id: 'r1'});
+		expect(((await (await connector()).commands?.send?.(target, 'm1'))?.unwrapErr() as {message?: string}).message).toBe('Only drafts can be sent');
 	});
 
 	test('a draft without a recipient isn’t sent', async () => {

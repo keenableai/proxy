@@ -40,6 +40,10 @@ function readGoogleError(error: Extract<FetchError, {kind: 'http'}>): {reasons: 
 
 const RATE_LIMITED = ['rateLimitExceeded', 'userRateLimitExceeded', 'RATE_LIMIT_EXCEEDED'];
 
+// What Google says of a call whose token lacks the scope it takes, as sending a draft does with
+// only `gmail.send` granted.
+const SCOPE_MISSING = ['insufficientPermissions', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'];
+
 /** What one of Google's errors means: a token to refresh, a file not there, a refusal to pass on, or Google out of reach. */
 export function googleError(error: FetchError): ApiError {
 	if (error.kind !== 'http') {
@@ -65,6 +69,9 @@ export function googleError(error: FetchError): ApiError {
 	// Drive says it is busy with a 403.
 	if (reasons.some((reason) => RATE_LIMITED.includes(reason))) {
 		return ApiErr.providerUnreachable(error);
+	}
+	if (reasons.some((reason) => SCOPE_MISSING.includes(reason))) {
+		return ApiErr.validationError("Google didn't allow this at sign-in. Sign in to Google again to allow it.");
 	}
 	// Any other refusal, such as a file the account may not open or a query Google can't read, in
 	// Google's own words.

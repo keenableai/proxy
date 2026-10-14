@@ -5,7 +5,7 @@ import MailComposer from 'nodemailer/lib/mail-composer';
 import type Mail from 'nodemailer/lib/mailer';
 import {Err, Ok, Result} from 'ts-results-es';
 
-import {ApiErr, type ApiError, Do} from '@proxy/utils';
+import {ApiErr, type ApiError, Do, requirePresent} from '@proxy/utils';
 
 import {callGoogle} from '../connections/google/google-client';
 import {
@@ -17,12 +17,14 @@ import {
 	folderQuery,
 	getDraft,
 	getMessage,
+	getMessageLabels,
 	getMessageSummaries,
 	GMAIL_ID,
 	headerOf,
 	listDrafts,
 	listMessageIds,
 	messageBody,
+	messageHtml,
 	modifyMessage,
 	rawMessage,
 	sendDraft,
@@ -71,9 +73,22 @@ function requireRef(recordId: string): Result<EmailRef, ApiError> {
 	return Ok(ref);
 }
 
-// Drafts are edited, deleted and sent; every other email only marked, starred or moved.
-function requireDraft(recordId: string, refusal: string): Result<string, ApiError> {
-	return requireRef(recordId).andThen((ref) => (ref.kind === 'draft' ? Ok(ref.draftId) : Err(ApiErr.validationError(refusal))));
+// Drafts are edited, deleted and sent, by their draft ids; every other email only marked, starred
+// or moved. A draft listed by its message id, when its draft id wasn't found among the drafts
+// Gmail lists, is looked for again.
+function requireDraft(token: string, recordId: string, refusal: string): Promise<Result<string, ApiError>> {
+	return Do(async ($) => {
+		const ref = $(requireRef(recordId));
+		if (ref.kind === 'draft') {
+			return ref.draftId;
+		}
+		const message = $((await getMessageLabels(token, ref.messageId)).mapErr(notFoundAs(recordId)));
+		if (!isDraft(message)) {
+			return $(Err(ApiErr.validationError(refusal)));
+		}
+		const draftId = $(await findDraftIds(token, [message.id])).get(message.id);
+		return $(requirePresent(draftId, ApiErr.validationError(refusal)));
+	});
 }
 
 function requireMessage(recordId: string): Result<string, ApiError> {
@@ -133,8 +148,9 @@ function fullRecord(recordId: string, message: GmailMessage): DataRecord {
 	return toRecord(recordId, message, {...summaryValues(message), body: messageBody(message.payload)});
 }
 
+// A draft in the drafts, not one moved to Trash, which Gmail doesn't list among them.
 function isDraft(message: GmailMessage): boolean {
-	return (message.labelIds ?? []).includes('DRAFT');
+	return folderOf(message.labelIds ?? []) === 'Draft';
 }
 
 // A message a list found but that was gone by the time it was opened is left out.
@@ -223,13 +239,17 @@ function keptOf(payload: MessagePart | undefined): Kept {
 	return {cc: headerOf(payload, 'Cc'), bcc: headerOf(payload, 'Bcc'), inReplyTo: headerOf(payload, 'In-Reply-To'), references: headerOf(payload, 'References')};
 }
 
-/** An email from the connection's address, as the IMAP connector writes one, as RFC 2822 text. */
-async function compose(from: string, values: RecordValues, kept: Kept | null): Promise<Result<Buffer, ApiError>> {
+/**
+ * An email from the connection's address, as the IMAP connector writes one, as RFC 2822 text, with
+ * an HTML version beside the text where one is kept.
+ */
+async function compose(from: string, values: RecordValues, kept: Kept | null, html: string | null = null): Promise<Result<Buffer, ApiError>> {
 	const options: Mail.Options = {
 		from,
 		to: values.to,
 		subject: values.subject,
 		text: values.body,
+		...(html !== null ? {html} : {}),
 		messageId: `<${randomUUID()}@proxy>`,
 		...(kept?.cc ? {cc: kept.cc} : {}),
 		...(kept?.bcc ? {bcc: kept.bcc} : {}),
@@ -254,19 +274,24 @@ function createDraftRecord(target: RecordTarget, values: RecordValues): Promise<
 
 /**
  * Writes a draft again with the fields given, the rest as they were, keeping its Cc, Bcc and
- * thread. A draft with attachments is refused: written again here, it would lose them.
+ * thread. A draft with attachments is refused: written again here, it would lose them. Recipients
+ * written as they read, bare, keep their names, and the HTML version, as Gmail's own editor
+ * writes one, is kept while the text is as it reads; text written differently goes out as text.
  */
 function updateDraftRecord(target: RecordTarget, recordId: string, values: RecordValues): Promise<Result<DataRecord, ApiError>> {
 	return callGoogle(target.connection, (token) =>
 		Do(async ($) => {
-			const draftId = $(requireDraft(recordId, 'Only drafts can be edited or deleted'));
+			const draftId = $(await requireDraft(token, recordId, 'Only drafts can be edited or deleted'));
 			const draft = $((await getDraft(token, draftId)).mapErr(notFoundAs(recordId)));
 			const {payload, threadId} = draft.message;
 			if (attachmentNames(payload).length > 0) {
 				return $(Err(ApiErr.validationError('This draft has attachments, which editing it here would drop; edit it in Gmail')));
 			}
 			const current = {to: headerOf(payload, 'To'), subject: headerOf(payload, 'Subject'), body: messageBody(payload)};
-			const source = $(await compose(target.connection.account, {...current, ...values}, keptOf(payload)));
+			const written = {...current, ...values};
+			const to = written.to === formatAddresses(current.to, false) ? current.to : written.to;
+			const html = written.body === current.body ? messageHtml(payload) : null;
+			const source = $(await compose(target.connection.account, {...written, to}, keptOf(payload), html));
 			$(await updateDraft(token, draftId, rawMessage(source, threadId ?? null)));
 			return $(await readDraft(token, recordId, draftId));
 		}),
@@ -276,7 +301,7 @@ function updateDraftRecord(target: RecordTarget, recordId: string, values: Recor
 function removeDraft(target: RecordTarget, recordId: string): Promise<Result<void, ApiError>> {
 	return callGoogle(target.connection, (token) =>
 		Do(async ($) => {
-			const draftId = $(requireDraft(recordId, 'Only drafts can be edited or deleted'));
+			const draftId = $(await requireDraft(token, recordId, 'Only drafts can be edited or deleted'));
 			$((await deleteDraft(token, draftId)).mapErr(notFoundAs(recordId)));
 		}),
 	);
@@ -315,7 +340,7 @@ function requireRecipient(to: string, cc: string, bcc: string): Result<void, Api
 const send: CommandRunner = (target, recordId) =>
 	callGoogle(target.connection, (token) =>
 		Do(async ($) => {
-			const draftId = $(requireDraft(recordId, 'Only drafts can be sent'));
+			const draftId = $(await requireDraft(token, recordId, 'Only drafts can be sent'));
 			const {payload} = $((await getDraft(token, draftId)).mapErr(notFoundAs(recordId))).message;
 			$(requireRecipient(headerOf(payload, 'To'), headerOf(payload, 'Cc'), headerOf(payload, 'Bcc')));
 			$((await sendDraft(token, draftId)).mapErr(notFoundAs(recordId)));
