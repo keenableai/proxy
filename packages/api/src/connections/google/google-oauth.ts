@@ -56,7 +56,11 @@ const tokensSchema = z.object({
 
 type Tokens = z.infer<typeof tokensSchema>;
 
-const idTokenPayloadSchema = z.object({email: z.string().min(1), email_verified: z.boolean().optional()});
+// `sub` is Google's id for the account, which stays as its address changes.
+const idTokenPayloadSchema = z.object({sub: z.string().min(1), email: z.string().min(1), email_verified: z.boolean().optional()});
+
+/** Who a sign-in was for: Google's id for the account, and its address as it is now. */
+export type GoogleAccount = {id: string; email: string};
 
 /** Google's sign-in page for a connection, coming back to `redirectUri` with `state`. */
 export function googleAuthorizeUrl(client: GoogleClient, args: {redirectUri: string; state: string; challenge: string}): string {
@@ -107,34 +111,40 @@ function grantedScopes(tokens: Tokens): string[] | null {
 	return tokens.scope === undefined ? null : tokens.scope.split(' ').filter((scope) => scope !== '');
 }
 
-// The account's address from the id_token's payload. It came straight from Google's token endpoint
-// over TLS, so the payload is trusted without checking its signature, as Google sign-in does
+// The account from the id_token's payload. It came straight from Google's token endpoint over TLS,
+// so the payload is trusted without checking its signature, as Google sign-in does
 // (`auth/google.ts`); that saves asking Google's userinfo endpoint for what the token already says.
-function emailOf(idToken: string | undefined): Result<string, ApiError> {
+function accountOf(idToken: string | undefined): Result<GoogleAccount, ApiError> {
 	const unreadable = (cause: unknown): ApiError => ApiErr.providerUnreachable(cause);
 	const claims = Do<z.infer<typeof idTokenPayloadSchema>, ApiError>(($) => {
 		const payload = $(requirePresent(idToken?.split('.')[1], unreadable(new Error('Google answered a sign-in without an id_token'))));
 		const json = $(Result.wrap((): unknown => JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))).mapErr(unreadable));
 		return $(parseSchema(idTokenPayloadSchema, json).mapErr(unreadable));
 	});
-	return claims.andThen(({email, email_verified: verified}) => {
+	return claims.andThen(({sub, email, email_verified: verified}) => {
 		if (verified === false) {
 			return Err(ApiErr.validationError(`Google hasn't verified ${email}`));
 		}
-		return Ok(email.toLowerCase());
+		return Ok({id: sub, email: email.toLowerCase()});
 	});
 }
 
 /** Trades the code Google sent back for the connection's first tokens, and the account they are for. */
-export async function exchangeGoogleCode(client: GoogleClient, args: {redirectUri: string; code: string; verifier: string}): Promise<Result<GoogleCredential, ApiError>> {
+export async function exchangeGoogleCode(
+	client: GoogleClient,
+	args: {redirectUri: string; code: string; verifier: string},
+): Promise<Result<{account: GoogleAccount; credential: GoogleCredential}, ApiError>> {
 	const tokens = await requestTokens(client, {grant_type: 'authorization_code', code: args.code, redirect_uri: args.redirectUri, code_verifier: args.verifier});
 	return tokens.andThen((value) =>
-		emailOf(value.id_token).map((email) => ({
-			accessToken: value.access_token,
-			refreshToken: value.refresh_token ?? null,
-			expiresAt: expiresAt(value),
-			scopes: grantedScopes(value) ?? [],
-			email,
+		accountOf(value.id_token).map((account) => ({
+			account,
+			credential: {
+				accessToken: value.access_token,
+				refreshToken: value.refresh_token ?? null,
+				expiresAt: expiresAt(value),
+				scopes: grantedScopes(value) ?? [],
+				email: account.email,
+			},
 		})),
 	);
 }

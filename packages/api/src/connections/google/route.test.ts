@@ -3,11 +3,19 @@ import {Ok, type Result} from 'ts-results-es';
 
 import type {ApiError} from '@proxy/utils';
 
-const listConnections = mock();
+const findAccountConnection = mock();
 const createConnection = mock();
-const updateConnectionCredential = mock();
+const renewConnection = mock();
 
-mock.module('@proxy/db/connection', () => ({listConnections, createConnection, updateConnectionCredential, getConnectionCredential: mock(async () => Ok(null)), updateConnectionTools: mock(), updateConnectionName: mock()}));
+mock.module('@proxy/db/connection', () => ({
+	findAccountConnection,
+	createConnection,
+	renewConnection,
+	updateConnectionCredential: mock(),
+	getConnectionCredential: mock(async () => Ok(null)),
+	updateConnectionTools: mock(),
+	updateConnectionName: mock(),
+}));
 
 const getUserOrgId = mock();
 
@@ -112,9 +120,9 @@ beforeEach(() => {
 	env.GOOGLE_CLIENT_ID = 'client-1.apps.googleusercontent.com';
 	env.GOOGLE_CLIENT_SECRET = 'secret-1';
 	getUserOrgId.mockResolvedValue(Ok('org-1'));
-	listConnections.mockResolvedValue(Ok([]));
+	findAccountConnection.mockResolvedValue(Ok(null));
 	createConnection.mockResolvedValue(Ok({id: 'conn-1'}));
-	updateConnectionCredential.mockResolvedValue(Ok(true));
+	renewConnection.mockResolvedValue(Ok(undefined));
 });
 
 describe('handleStartGoogleRoute', () => {
@@ -160,7 +168,8 @@ describe('handleGoogleCallbackRoute', () => {
 			code_verifier: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
 		});
 		const created = createConnection.mock.calls[0]?.[0];
-		expect(created).toMatchObject({orgId: 'org-1', integrationId: 'google', account: 'alex@example.com', defaults: ['readFiles']});
+		expect(findAccountConnection).toHaveBeenCalledWith({orgId: 'org-1', integrationId: 'google', account: 'alex@example.com', providerAccountId: '1093'});
+		expect(created).toMatchObject({orgId: 'org-1', integrationId: 'google', account: 'alex@example.com', providerAccountId: '1093', defaults: ['readFiles']});
 		expect(JSON.parse(String(created.credential).replace(/^enc:/, ''))).toEqual({
 			accessToken: 'access-1',
 			refreshToken: 'refresh-1',
@@ -171,14 +180,25 @@ describe('handleGoogleCallbackRoute', () => {
 		expect(res.redirect).toHaveBeenCalledWith('https://app.example.com/connections/conn-1?added');
 	});
 
-	test('signing in again with the same address gives its connection the new tokens', async () => {
-		listConnections.mockResolvedValue(Ok([{id: 'conn-0', integrationId: 'google', account: 'alex@example.com'}]));
+	test('signing in again with the same account gives its connection the new tokens', async () => {
+		findAccountConnection.mockResolvedValue(Ok({id: 'conn-0'}));
 		const {cookie, state} = await start();
 		const res = await callback({cookie: cookie?.value ?? '', query: {state, code: 'code-1'}});
 
 		expect(createConnection).not.toHaveBeenCalled();
-		expect(updateConnectionCredential.mock.calls[0]?.[0]).toMatchObject({connectionId: 'conn-0'});
+		expect(renewConnection.mock.calls[0]?.[0]).toMatchObject({connectionId: 'conn-0'});
 		expect(res.redirect).toHaveBeenCalledWith('https://app.example.com/connections/conn-0');
+	});
+
+	test("after the account's address changed, signing in again finds its connection by Google's id and gives it the new address", async () => {
+		google.idToken = idToken({sub: '1093', email: 'alex.kim@example.com', email_verified: true});
+		findAccountConnection.mockResolvedValue(Ok({id: 'conn-0'}));
+		const {cookie, state} = await start();
+		await callback({cookie: cookie?.value ?? '', query: {state, code: 'code-1'}});
+
+		expect(findAccountConnection).toHaveBeenCalledWith({orgId: 'org-1', integrationId: 'google', account: 'alex.kim@example.com', providerAccountId: '1093'});
+		expect(renewConnection.mock.calls[0]?.[0]).toMatchObject({connectionId: 'conn-0', account: 'alex.kim@example.com', providerAccountId: '1093'});
+		expect(JSON.parse(String(renewConnection.mock.calls[0]?.[0].credential).replace(/^enc:/, ''))).toMatchObject({email: 'alex.kim@example.com'});
 	});
 
 	test('an address Google has not verified is turned down', async () => {

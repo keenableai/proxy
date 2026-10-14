@@ -5,7 +5,7 @@ import {Err, type Result} from 'ts-results-es';
 import {z} from 'zod';
 
 import {ApiErr, type ApiError, Do, parseCookieHeader, requirePresent} from '@proxy/utils';
-import {createConnection, listConnections, updateConnectionCredential, updateConnectionName, updateConnectionTools, type ConnectionRow} from '@proxy/db/connection';
+import {createConnection, findAccountConnection, renewConnection, updateConnectionName, updateConnectionTools, type ConnectionRow} from '@proxy/db/connection';
 import type {IntegrationId, McpTool} from '@proxy/integrations';
 
 import {queryParam, timingSafeEqualString, useSecureCookies} from '../auth/session';
@@ -50,10 +50,12 @@ type SignInStart<E> = (request: SignInRequest) => Promise<Result<{url: string; k
 export type SignInAnswer<E> = {redirectUri: string; code: string; verifier: string; kept: E};
 
 /**
- * A connection to save: the account it shows, its credential, stored encrypted, the actions agents
- * get with a new one, and a custom MCP server's tools and the name the person gave it.
+ * A connection to save: the account it shows, the provider's own id for it where it gives one,
+ * which stays as the account's address changes (Google's `sub`), its credential, stored encrypted,
+ * the actions agents get with a new one, and a custom MCP server's tools and the name the person
+ * gave it.
  */
-export type Connected<C> = {account: string; credential: C; defaults: string[]; tools?: McpTool[]; name?: string};
+export type Connected<C> = {account: string; accountId?: string; credential: C; defaults: string[]; tools?: McpTool[]; name?: string};
 
 /** A PKCE verifier and the challenge the provider is sent in its place. */
 export function makePkce(): {verifier: string; challenge: string} {
@@ -62,28 +64,31 @@ export function makePkce(): {verifier: string; challenge: string} {
 }
 
 /**
- * Saves a connection: a new one, or an existing one of the same account given the new credential,
- * and the tools and the name, where it has its own; `added` unless it was already there.
+ * Saves a connection: a new one, or an existing one of the same account given the new credential
+ * and the account as the provider names it now, such as an address changed since, and the tools
+ * and the name, where it has its own; `added` unless it was already there.
  */
 export function saveConnection<C>(orgId: string, integrationId: IntegrationId, connected: Connected<C>): Promise<Result<{row: ConnectionRow; added: boolean}, ApiError>> {
 	return Do(async ($) => {
+		const {account, tools} = connected;
 		const encrypted = $(encryptSecret(JSON.stringify(connected.credential)));
-		const existing = $(await listConnections(orgId)).find((connection) => connection.integrationId === integrationId && connection.account === connected.account);
+		const providerAccountId = connected.accountId ?? null;
 		const name = connected.name === undefined ? {} : {name: connected.name};
+		const existing = $(await findAccountConnection({orgId, integrationId, account, providerAccountId}));
 		if (!existing) {
-			const tools = connected.tools === undefined ? {} : {tools: JSON.stringify(connected.tools)};
-			return {row: $(await createConnection({orgId, integrationId, account: connected.account, credential: encrypted, defaults: connected.defaults, ...tools, ...name})), added: true};
+			const listed = tools === undefined ? {} : {tools: JSON.stringify(tools)};
+			return {row: $(await createConnection({orgId, integrationId, account, providerAccountId, credential: encrypted, defaults: connected.defaults, ...listed, ...name})), added: true};
 		}
-		$(await updateConnectionCredential({connectionId: existing.id, credential: encrypted}));
+		$(await renewConnection({connectionId: existing.id, account, providerAccountId, credential: encrypted}));
 		if (connected.name !== undefined) {
 			$(await updateConnectionName({connectionId: existing.id, name: connected.name}));
 		}
-		if (connected.tools === undefined) {
-			return {row: {...existing, ...name}, added: false};
+		if (tools === undefined) {
+			return {row: {...existing, account, ...name}, added: false};
 		}
-		const tools = JSON.stringify(connected.tools);
-		$(await updateConnectionTools({connectionId: existing.id, tools, actions: connected.tools.map((tool) => tool.name)}));
-		return {row: {...existing, tools, ...name}, added: false};
+		const stored = JSON.stringify(tools);
+		$(await updateConnectionTools({connectionId: existing.id, tools: stored, actions: tools.map((tool) => tool.name)}));
+		return {row: {...existing, account, tools: stored, ...name}, added: false};
 	});
 }
 
