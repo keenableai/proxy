@@ -27,7 +27,8 @@ type Props = {
 // control for it. On an agent's page every action starts on the connection's default; one the
 // agent has its own setting for is marked with a bar, a button that makes it the default for
 // every agent, and one that resets it to the default. An action the connection's sign-in didn't
-// cover is off whatever is set, its checkbox disabled.
+// cover is off whatever is set, its checkbox disabled, and can't be made the default from here,
+// since it shows off whatever the agent's own setting is.
 export function ConnectionAccess({
 	actions,
 	defaults,
@@ -124,7 +125,7 @@ export function ConnectionAccess({
 						</label>
 						<span className="flex shrink-0 items-center gap-2 text-muted-foreground">
 							{others > 0 && `Changed for ${others} ${others === 1 ? 'agent' : 'agents'}`}
-							{isOwn(action.id) && onMakeDefault && (
+							{isOwn(action.id) && onMakeDefault && !isUnavailable(action.id) && (
 								<IconButton
 									label="Make this the default for every agent"
 									onClick={() =>

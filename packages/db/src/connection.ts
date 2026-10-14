@@ -208,6 +208,14 @@ export async function updateConnectionName(data: {
 	});
 }
 
+/** How many connections of an integration are for an account, in every organization. */
+export async function countAccountConnections(data: {
+	integrationId: string;
+	account: string;
+}): Promise<Result<number, ApiError>> {
+	return wrapDb(() => db.connection.count({where: data}));
+}
+
 /** `Ok(false)` means no such connection in the organization. Its defaults go with it. */
 export async function deleteConnection(
 	orgId: string,

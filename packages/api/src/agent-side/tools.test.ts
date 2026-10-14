@@ -145,6 +145,16 @@ describe("actions the connection's sign-in didn't cover", () => {
 		expect(connector.list).not.toHaveBeenCalled();
 		expect(logAgentRequest.mock.calls[0]?.[0]).toMatchObject({connectionId: 'google-1', collectionId: 'files', action: 'list', query: 'budget', outcome: 'denied'});
 	});
+
+	test("one the agent's own setting turns off anyway is plainly forbidden", async () => {
+		getAgent.mockResolvedValue(Ok({...agent, grants: [{connectionId: 'google-1', actionId: 'readFiles', allowed: false}]}));
+		useConnection(googleConnection);
+
+		const {runAgentTool} = await import('./tools');
+		const result = await runAgentTool(caller, 'google-1', 'files_list', {});
+
+		expect(result.unwrapErr().kind).toBe('forbidden');
+	});
 });
 
 describe('listAgentTools', () => {

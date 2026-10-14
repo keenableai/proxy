@@ -8,6 +8,7 @@ const getConnectionWithCredential = mock();
 const deleteConnection = mock();
 const setConnectionDefaults = mock();
 const updateConnectionName = mock();
+const countAccountConnections = mock();
 
 mock.module('@proxy/db/connection', () => ({
 	listConnectionsWithCredential,
@@ -15,6 +16,7 @@ mock.module('@proxy/db/connection', () => ({
 	deleteConnection,
 	setConnectionDefaults,
 	updateConnectionName,
+	countAccountConnections,
 }));
 
 const getUserOrgId = mock();
@@ -74,6 +76,7 @@ beforeEach(() => {
 	mock.clearAllMocks();
 	google.requests = [];
 	google.status = 200;
+	countAccountConnections.mockResolvedValue(Ok(1));
 	getUserOrgId.mockResolvedValue(Ok('org-1'));
 	listConnectionsWithCredential.mockResolvedValue(Ok([emailRow]));
 	getConnectionWithCredential.mockResolvedValue(Ok(emailRow));
@@ -91,6 +94,17 @@ describe('handleListConnectionsRoute', () => {
 		expect(connection).toMatchObject({id: 'conn-1', integrationId: 'email', account: 'alex@example.com'});
 		expect(connection?.defaults).toEqual(['read']);
 		expect(connection?.unavailable).toEqual([]);
+	});
+
+	test("a Google credential that can't be read leaves the rest listed, itself with no action available", async () => {
+		listConnectionsWithCredential.mockResolvedValue(Ok([emailRow, {...googleRow([]), credential: 'v1.other-key'}]));
+		const {handleListConnectionsRoute} = await import('./route');
+		const {connections} = (await handleListConnectionsRoute(makeRequest())).unwrap();
+
+		expect(connections.map((connection) => [connection.id, connection.unavailable])).toEqual([
+			['conn-1', []],
+			['conn-2', ['readFiles']],
+		]);
 	});
 
 	test("says which actions a Google connection's sign-in didn't cover, never the credential", async () => {
@@ -173,6 +187,19 @@ describe('handleDeleteConnectionRoute', () => {
 
 		expect(result.isOk()).toBe(true);
 		expect(google.requests.map(({url, body}) => [url, body.get('token')])).toEqual([['https://oauth2.googleapis.com/revoke', 'refresh-1']]);
+		expect(deleteConnection).toHaveBeenCalledWith('org-1', 'conn-2');
+	});
+
+	test('keeps the grant at Google while another connection, in any organization, is for the same account', async () => {
+		getConnectionWithCredential.mockResolvedValue(Ok(withoutDrive));
+		countAccountConnections.mockResolvedValue(Ok(2));
+
+		const {handleDeleteConnectionRoute} = await import('./route');
+		const result = await handleDeleteConnectionRoute(makeRequest({connectionId: 'conn-2'}));
+
+		expect(result.isOk()).toBe(true);
+		expect(countAccountConnections).toHaveBeenCalledWith({integrationId: 'google', account: 'alex@example.com'});
+		expect(google.requests).toEqual([]);
 		expect(deleteConnection).toHaveBeenCalledWith('org-1', 'conn-2');
 	});
 

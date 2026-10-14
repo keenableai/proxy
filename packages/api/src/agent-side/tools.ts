@@ -82,7 +82,7 @@ export function listAgentConnections(signedIn: SignedInAgent): Promise<Result<{a
 				if (!integration) {
 					return [];
 				}
-				const actions = actionsOf(agent, connection, integration, $(unavailableActions(connection)));
+				const actions = actionsOf(agent, connection, integration, unavailableActions(connection));
 				return [
 					{
 						id: connection.id,
@@ -104,7 +104,7 @@ export function listAgentTools(signedIn: SignedInAgent, connectionId: string): P
 	return Do(async ($) => {
 		const agent = $(await requireAgent(signedIn));
 		const {connection, integration} = $(await loadConnection(signedIn.orgId, connectionId));
-		return allowedTools(integration, actionsOf(agent, connection, integration, $(unavailableActions(connection))));
+		return allowedTools(integration, actionsOf(agent, connection, integration, unavailableActions(connection)));
 	});
 }
 
@@ -157,13 +157,23 @@ export function runAgentTool(caller: AgentCaller, connectionId: string, toolName
 
 		// A list's search is logged, a refused one's too, so its params are read first.
 		const listParams = tool.kind === 'list' ? $(parseToolParams(tool, params)) : null;
-		const unavailable = $(unavailableActions(connection));
+		const unavailable = unavailableActions(connection);
 		if (!actionsOf(agent, connection, integration, unavailable).includes(tool.action)) {
 			$(await log(run, 'denied', null, searchOf(listParams)));
-			return $(Err(unavailable.includes(tool.action) ? unavailableError(integration, tool.action) : ApiErr.forbidden()));
+			return $(Err(refusal(integration, agent, connection, unavailable, tool.action)));
 		}
 		return $(await execute(run, listParams ?? $(parseToolParams(tool, params))));
 	});
+}
+
+// Why an action is refused: the sign-in, naming the action it didn't cover, where signing in again
+// would allow it as the agent's settings stand; else plainly forbidden.
+function refusal(integration: Integration, agent: AgentRow, connection: ConnectionRow, unavailable: string[], actionId: string): ApiError {
+	if (!actionsOf(agent, connection, integration, []).includes(actionId)) {
+		return ApiErr.forbidden();
+	}
+	const required = integration.actions.find((action) => action.id === actionId)?.requires;
+	return unavailableError(integration, unavailable.includes(actionId) || required === undefined ? actionId : required);
 }
 
 function searchOf(params: Record<string, string> | null): string | null {
@@ -211,7 +221,7 @@ function runServerTool(
 				outcome,
 				via: caller.via,
 			});
-		if (!actionsOf(agent, connection, integration, $(unavailableActions(connection))).includes(tool.action)) {
+		if (!actionsOf(agent, connection, integration, unavailableActions(connection)).includes(tool.action)) {
 			$(await logRun('denied'));
 			return $(Err(ApiErr.forbidden()));
 		}

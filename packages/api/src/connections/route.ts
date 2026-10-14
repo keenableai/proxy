@@ -15,8 +15,8 @@ type StoredConnectionRow = ConnectionRow & {credential: string | null};
 
 // The connection as the web app gets it, with the actions its sign-in didn't cover, read from its
 // credential on every request.
-function respond(row: StoredConnectionRow): Result<ConnectionResponse, ApiError> {
-	return unavailableActions(row).map((unavailable) => toConnectionResponse(row, unavailable));
+function respond(row: StoredConnectionRow): ConnectionResponse {
+	return toConnectionResponse(row, unavailableActions(row));
 }
 
 function requireConnection(orgId: string, connectionId: string): Promise<Result<StoredConnectionRow, ApiError>> {
@@ -29,14 +29,14 @@ export function handleListConnectionsRoute(request: AuthenticatedRequest): Promi
 	return Do(async ($) => {
 		const orgId = $(await requireUserOrgId(request));
 		const rows = $(await listConnectionsWithCredential(orgId));
-		return {connections: rows.map((row) => $(respond(row)))};
+		return {connections: rows.map(respond)};
 	});
 }
 
 export function handleGetConnectionRoute(request: AuthenticatedRequest): Promise<Result<ConnectionResponse, ApiError>> {
 	return Do(async ($) => {
 		const orgId = $(await requireUserOrgId(request));
-		return $(respond($(await requireConnection(orgId, request.params.connectionId ?? ''))));
+		return respond($(await requireConnection(orgId, request.params.connectionId ?? '')));
 	});
 }
 
@@ -85,7 +85,7 @@ export function handleRenameConnectionRoute(request: AuthenticatedRequest): Prom
 		}
 
 		$(await updateConnectionName({connectionId, name: name === '' ? null : name}));
-		return $(respond({...row, name: name === '' ? null : name}));
+		return respond({...row, name: name === '' ? null : name});
 	});
 }
 
@@ -101,9 +101,9 @@ export function handleSetConnectionDefaultsRoute(request: AuthenticatedRequest):
 		const row = $(await requireConnection(orgId, connectionId));
 		const integration = $(requireIntegration(row));
 		const actions = $(parseActionChanges(integration, z.boolean(), request.body));
-		$(refuseUnavailable(integration, $(unavailableActions(row)), actions));
+		$(refuseUnavailable(integration, unavailableActions(row), actions));
 
 		$(await setConnectionDefaults({connectionId, actions}));
-		return $(respond($(await requireConnection(orgId, connectionId))));
+		return respond($(await requireConnection(orgId, connectionId)));
 	});
 }

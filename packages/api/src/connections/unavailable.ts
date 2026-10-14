@@ -1,8 +1,9 @@
 import {Err, Ok, type Result} from 'ts-results-es';
 
 import {ApiErr, type ApiError} from '@proxy/utils';
-import type {Integration} from '@proxy/integrations';
+import {findIntegration, type Integration} from '@proxy/integrations';
 
+import {log, serializeError} from '../observability/log';
 import {readGoogleCredential} from './google/google-oauth';
 import {unavailableGoogleActions} from './google/scopes';
 
@@ -12,14 +13,23 @@ import {unavailableGoogleActions} from './google/scopes';
  * what Google granted. Every other integration's sign-in covers all its actions.
  */
 
-type StoredConnection = {integrationId: string; credential: string | null};
+type StoredConnection = {id: string; integrationId: string; credential: string | null};
 
-/** The connection's actions its sign-in didn't cover, in the catalog's order. */
-export function unavailableActions(connection: StoredConnection): Result<string[], ApiError> {
+/**
+ * The connection's actions its sign-in didn't cover, in the catalog's order. A credential that
+ * can't be read, as after a change of `ENCRYPTION_KEY`, covers none, so the rest of the
+ * organization's connections are listed and used as before and this one can still be deleted.
+ */
+export function unavailableActions(connection: StoredConnection): string[] {
 	if (connection.integrationId !== 'google') {
-		return Ok([]);
+		return [];
 	}
-	return readGoogleCredential(connection.credential).map(unavailableGoogleActions);
+	const credential = readGoogleCredential(connection.credential);
+	if (credential.isErr()) {
+		log.warn('A Google credential could not be read', {connectionId: connection.id, ...('cause' in credential.error ? serializeError(credential.error.cause) : {})});
+		return findIntegration(connection.integrationId)?.actions.map((action) => action.id) ?? [];
+	}
+	return unavailableGoogleActions(credential.value);
 }
 
 /** The refusal of an action the sign-in didn't cover, saying how to allow it. */

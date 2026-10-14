@@ -243,6 +243,25 @@ describe('ConnectionAccess with what the sign-in covered', () => {
 		expect(archive.hasAttribute('data-disabled')).toBe(false);
 	});
 
+	test("an agent's own setting for an action the sign-in didn't cover can be reset, not made the default", () => {
+		const onMakeDefault = mock();
+		render(
+			<ConnectionAccess
+				actions={actions}
+				defaults={[]}
+				own={{read: true, archive: true}}
+				unavailable={['read']}
+				onChange={mock()}
+				onMakeDefault={onMakeDefault}
+			/>,
+		);
+
+		expect(
+			screen.getAllByRole('button', {name: 'Make this the default for every agent'}),
+		).toHaveLength(1);
+		expect(screen.getAllByRole('button', {name: 'Reset to default'})).toHaveLength(2);
+	});
+
 	test('every action can be set when the sign-in covered them all', () => {
 		render(<ConnectionAccess actions={actions} defaults={['read']} onChange={mock()} />);
 
