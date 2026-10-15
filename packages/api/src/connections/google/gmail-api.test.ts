@@ -1,6 +1,15 @@
-import {describe, expect, test} from 'bun:test';
+import {describe, expect, mock, test} from 'bun:test';
+import {Ok} from 'ts-results-es';
 
-import {attachmentNames, folderOf, folderQuery, htmlToText, mapWithLimit, messageBody, type MessagePart} from './gmail-api';
+import type {MessagePart} from './gmail-api';
+
+// The Gmail calls go through the Google client, which reads the environment and the database on
+// import; only the reading of Gmail's answers is tested here.
+mock.module('@proxy/db/connection', () => ({updateConnectionCredential: mock(), getConnectionCredential: mock(async () => Ok(null))}));
+
+mock.module('../../utils/env', () => ({env: {NODE_ENV: 'production', APP_URL: 'https://app.example.com', GOOGLE_CLIENT_ID: 'client-1', GOOGLE_CLIENT_SECRET: 'secret-1'}}));
+
+const {attachmentNames, folderOf, folderQuery, htmlToText, mapWithLimit, messageBody} = await import('./gmail-api');
 
 const base64url = (text: string, encoding: BufferEncoding = 'utf8'): string => Buffer.from(text, encoding).toString('base64url');
 
