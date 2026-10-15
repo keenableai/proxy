@@ -38,6 +38,7 @@ export function ConnectionAccess({
 	// Keep the control responsive while its change is saved and the route's data is reloaded.
 	const [pending, setPending] = useState<Partial<Record<string, boolean>>>({});
 	const queues = useRef<Partial<Record<string, Promise<void>>>>({});
+	const rangeAnchor = useRef<string | null>(null);
 	const defaultsRef = useRef(defaults);
 	const ownRef = useRef(own);
 	defaultsRef.current = defaults;
@@ -53,29 +54,65 @@ export function ConnectionAccess({
 		}
 		return next;
 	};
-	const queueChange = (actionId: string, checked: boolean, save: () => Promise<void>) => {
-		setPending((current) => ({...current, [actionId]: checked}));
+	const queueChanges = (checked: Record<string, boolean>, save: () => Promise<void>) => {
+		const actionIds = Object.keys(checked);
+		if (actionIds.length === 0) {
+			return;
+		}
+
+		setPending((current) => ({...current, ...checked}));
 
 		// Preserve click order across every control that can change the same action.
-		const previous = queues.current[actionId] ?? Promise.resolve();
-		const request = previous.catch(() => undefined).then(save);
-		queues.current[actionId] = request;
+		const previous = actionIds.map((actionId) => queues.current[actionId] ?? Promise.resolve());
+		const request = Promise.all(
+			previous.map((pendingSave) => pendingSave.catch(() => undefined)),
+		).then(save);
+		for (const actionId of actionIds) {
+			queues.current[actionId] = request;
+		}
 		const settle = () => {
-			if (queues.current[actionId] !== request) {
-				return;
-			}
-
-			delete queues.current[actionId];
 			setPending((current) => {
 				const next = {...current};
-				delete next[actionId];
+				for (const actionId of actionIds) {
+					if (queues.current[actionId] !== request) {
+						continue;
+					}
+
+					delete queues.current[actionId];
+					delete next[actionId];
+				}
 				return next;
 			});
 		};
 		void request.then(settle, settle);
 	};
+	const queueChange = (actionId: string, checked: boolean, save: () => Promise<void>) => {
+		queueChanges({[actionId]: checked}, save);
+	};
 	const change = (actionId: string, checked: boolean) => {
 		queueChange(actionId, checked, () => onChange({[actionId]: setting(actionId, checked)}));
+	};
+	const changeRange = (actionId: string, checked: boolean, shiftKey: boolean) => {
+		const anchorIndex = actions.findIndex((action) => action.id === rangeAnchor.current);
+		const actionIndex = actions.findIndex((action) => action.id === actionId);
+		if (!shiftKey || anchorIndex === -1 || actionIndex === -1) {
+			rangeAnchor.current = actionId;
+			change(actionId, checked);
+			return;
+		}
+
+		const first = Math.min(anchorIndex, actionIndex);
+		const last = Math.max(anchorIndex, actionIndex);
+		const changedActions = actions
+			.slice(first, last + 1)
+			.filter((action) => isOn(action.id) !== checked || pending[action.id] !== undefined);
+		queueChanges(Object.fromEntries(changedActions.map((action) => [action.id, checked])), () =>
+			onChange(
+				Object.fromEntries(
+					changedActions.map((action) => [action.id, setting(action.id, checked)]),
+				),
+			),
+		);
 	};
 
 	return (
@@ -86,6 +123,8 @@ export function ConnectionAccess({
 				const required = actions.find((candidate) => candidate.id === action.requires);
 				const others = differing?.[action.id] ?? 0;
 				const inputId = `${idPrefix}-${action.id}`;
+				const labelId = `${inputId}-label`;
+				const descriptionId = `${inputId}-description`;
 				return (
 					<li
 						key={action.id}
@@ -96,12 +135,48 @@ export function ConnectionAccess({
 					>
 						<Checkbox
 							id={inputId}
+							aria-labelledby={labelId}
+							aria-describedby={descriptionId}
 							className="mt-0.5"
 							checked={checked}
-							onCheckedChange={(next) => change(action.id, next)}
+							onMouseDown={(event) => {
+								if (!event.shiftKey || event.button !== 0) {
+									return;
+								}
+
+								event.preventDefault();
+								event.currentTarget.focus();
+							}}
+							onCheckedChange={(next, details) =>
+								changeRange(
+									action.id,
+									next,
+									details.event instanceof MouseEvent && details.event.shiftKey,
+								)
+							}
 						/>
-						<label htmlFor={inputId} className="flex min-w-0 flex-1 flex-col gap-0.5">
-							<span className="flex items-center gap-2">
+						<div
+							className="flex min-w-0 flex-1 flex-col gap-0.5"
+							onMouseDown={(event) => {
+								if (!event.shiftKey) {
+									return;
+								}
+
+								event.preventDefault();
+								document.getElementById(inputId)?.focus();
+							}}
+							onClick={(event) => {
+								if (event.shiftKey) {
+									event.preventDefault();
+									changeRange(action.id, !checked, true);
+									return;
+								}
+
+								document.getElementById(inputId)?.focus();
+								changeRange(action.id, !checked, false);
+							}}
+						>
+							<span id={labelId} className="flex items-center gap-2">
 								{action.label}
 								{action.risk === 'high' && (
 									<Badge variant="destructive" className="font-normal">
@@ -109,11 +184,11 @@ export function ConnectionAccess({
 									</Badge>
 								)}
 							</span>
-							<span className="text-muted-foreground">
+							<span id={descriptionId} className="text-muted-foreground">
 								{action.description}
 								{blocked && required && ` · Off while ${required.label} is off`}
 							</span>
-						</label>
+						</div>
 						<span className="flex shrink-0 items-center gap-2 text-muted-foreground">
 							{others > 0 && `Changed for ${others} ${others === 1 ? 'agent' : 'agents'}`}
 							{isOwn(action.id) && onMakeDefault && (

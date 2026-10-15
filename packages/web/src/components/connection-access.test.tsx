@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 
 import {afterEach, describe, expect, test} from 'bun:test';
-import {act, cleanup, fireEvent, render, screen} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {ConnectionAccess} from '@/components/connection-access';
 import type {Action} from '@proxy/integrations';
 
@@ -16,6 +16,12 @@ const action: Action = {
 	risk: 'low',
 };
 
+const actions: Action[] = [
+	action,
+	{id: 'create', label: 'Create', description: 'Create records', risk: 'medium'},
+	{id: 'edit', label: 'Edit', description: 'Edit records', risk: 'high'},
+];
+
 function deferred() {
 	let resolve = () => {};
 	let reject = () => {};
@@ -27,6 +33,282 @@ function deferred() {
 }
 
 describe('ConnectionAccess', () => {
+	test('checks a range with shift-click and saves its changes together', async () => {
+		const changes: Array<Record<string, boolean | null>> = [];
+		render(
+			<ConnectionAccess
+				actions={actions}
+				defaults={[]}
+				onChange={(next) => {
+					changes.push(next);
+					return changes.length === 1 ? Promise.resolve() : new Promise(() => undefined);
+				}}
+			/>,
+		);
+		const checkboxes = screen.getAllByRole('checkbox');
+
+		fireEvent.click(checkboxes[0]!);
+		await act(async () => Promise.resolve());
+		fireEvent.click(checkboxes[2]!, {shiftKey: true});
+		await waitFor(() => expect(changes).toHaveLength(2));
+
+		expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-checked'))).toEqual([
+			'true',
+			'true',
+			'true',
+		]);
+		expect(changes).toEqual([{read: true}, {read: true, create: true, edit: true}]);
+	});
+
+	test('unchecks a range with shift-click', async () => {
+		const changes: Array<Record<string, boolean | null>> = [];
+		render(
+			<ConnectionAccess
+				actions={actions}
+				defaults={actions.map((action) => action.id)}
+				onChange={(next) => {
+					changes.push(next);
+					return changes.length === 1 ? Promise.resolve() : new Promise(() => undefined);
+				}}
+			/>,
+		);
+		const checkboxes = screen.getAllByRole('checkbox');
+
+		fireEvent.click(checkboxes[0]!);
+		await act(async () => Promise.resolve());
+		fireEvent.click(checkboxes[2]!, {shiftKey: true});
+		await waitFor(() => expect(changes).toHaveLength(2));
+
+		expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-checked'))).toEqual([
+			'false',
+			'false',
+			'false',
+		]);
+		expect(changes).toEqual([{read: false}, {read: false, create: false, edit: false}]);
+	});
+
+	test('keeps range changes that match an agent default inherited', async () => {
+		const changes: Array<Record<string, boolean | null>> = [];
+		render(
+			<ConnectionAccess
+				actions={actions}
+				defaults={['read', 'create']}
+				own={{read: false}}
+				onChange={(next) => {
+					changes.push(next);
+					return changes.length === 1 ? Promise.resolve() : new Promise(() => undefined);
+				}}
+			/>,
+		);
+		const checkboxes = screen.getAllByRole('checkbox');
+
+		fireEvent.click(checkboxes[0]!);
+		await act(async () => Promise.resolve());
+		fireEvent.click(checkboxes[2]!, {shiftKey: true});
+		await waitFor(() => expect(changes).toHaveLength(2));
+
+		expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-checked'))).toEqual([
+			'true',
+			'true',
+			'true',
+		]);
+		expect(changes).toEqual([{read: null}, {read: null, edit: true}]);
+	});
+
+	test('re-saves an optimistic range value after its earlier save fails', async () => {
+		const firstSave = deferred();
+		const changes: Array<Record<string, boolean | null>> = [];
+		render(
+			<ConnectionAccess
+				actions={actions}
+				defaults={[]}
+				onChange={(next) => {
+					changes.push(next);
+					return changes.length === 1 ? firstSave.promise : new Promise(() => undefined);
+				}}
+			/>,
+		);
+		const checkboxes = screen.getAllByRole('checkbox');
+
+		fireEvent.click(checkboxes[0]!);
+		await act(async () => Promise.resolve());
+		fireEvent.click(checkboxes[2]!, {shiftKey: true});
+		await act(async () => Promise.resolve());
+
+		expect(changes).toEqual([{read: true}]);
+
+		await act(async () => firstSave.reject());
+
+		expect(changes).toEqual([{read: true}, {read: true, create: true, edit: true}]);
+		expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-checked'))).toEqual([
+			'true',
+			'true',
+			'true',
+		]);
+	});
+
+	test('waits for every overlapping save before saving a range', async () => {
+		const readSave = deferred();
+		const createSave = deferred();
+		const editSave = deferred();
+		const rangeSave = deferred();
+		const changes: Array<Record<string, boolean | null>> = [];
+		render(
+			<ConnectionAccess
+				actions={actions}
+				defaults={[]}
+				onChange={(next) => {
+					changes.push(next);
+					if ('read' in next && 'create' in next) {
+						return rangeSave.promise;
+					}
+
+					if ('read' in next) {
+						return readSave.promise;
+					}
+
+					if ('create' in next) {
+						return createSave.promise;
+					}
+
+					return editSave.promise;
+				}}
+			/>,
+		);
+		const checkboxes = screen.getAllByRole('checkbox');
+
+		fireEvent.click(checkboxes[0]!);
+		await act(async () => Promise.resolve());
+		fireEvent.click(checkboxes[1]!);
+		await act(async () => Promise.resolve());
+		fireEvent.click(checkboxes[2]!);
+		await act(async () => Promise.resolve());
+		fireEvent.click(checkboxes[0]!, {shiftKey: true});
+		await act(async () => Promise.resolve());
+
+		expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-checked'))).toEqual([
+			'false',
+			'false',
+			'false',
+		]);
+		expect(changes).toEqual([{read: true}, {create: true}, {edit: true}]);
+
+		await act(async () => createSave.resolve());
+		await act(async () => editSave.reject());
+		expect(changes).toHaveLength(3);
+
+		await act(async () => readSave.resolve());
+		expect(changes).toEqual([
+			{read: true},
+			{create: true},
+			{edit: true},
+			{read: false, create: false, edit: false},
+		]);
+	});
+
+	test('treats shift-click as one change when its previous anchor is no longer listed', async () => {
+		const changes: Array<Record<string, boolean | null>> = [];
+		const onChange = (next: Record<string, boolean | null>) => {
+			changes.push(next);
+			return new Promise<void>(() => undefined);
+		};
+		const view = render(
+			<ConnectionAccess actions={actions.slice(0, 2)} defaults={[]} onChange={onChange} />,
+		);
+
+		fireEvent.click(screen.getByRole('checkbox', {name: /^Read/}));
+		await act(async () => Promise.resolve());
+		view.rerender(
+			<ConnectionAccess actions={actions.slice(1)} defaults={[]} onChange={onChange} />,
+		);
+		fireEvent.click(screen.getByRole('checkbox', {name: /^Edit/}), {shiftKey: true});
+		await act(async () => Promise.resolve());
+
+		expect(changes).toEqual([{read: true}, {edit: true}]);
+	});
+
+	test('keeps focus on the range endpoint and supports shift-clicking its text', async () => {
+		const changes: Array<Record<string, boolean | null>> = [];
+		render(
+			<ConnectionAccess
+				actions={actions}
+				defaults={[]}
+				onChange={(next) => {
+					changes.push(next);
+					return changes.length === 1 ? Promise.resolve() : new Promise(() => undefined);
+				}}
+			/>,
+		);
+		const checkboxes = screen.getAllByRole('checkbox');
+		const firstCheckbox = checkboxes[0]!;
+		const lastCheckbox = checkboxes[2]!;
+		const editText = screen.getByText('Edit').parentElement!;
+
+		fireEvent.click(firstCheckbox);
+		await act(async () => Promise.resolve());
+		fireEvent.mouseDown(editText, {shiftKey: true});
+		expect(document.activeElement).toBe(lastCheckbox);
+		expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-checked'))).toEqual([
+			'false',
+			'false',
+			'false',
+		]);
+		expect(changes).toEqual([{read: true}]);
+		fireEvent.click(editText, {shiftKey: true});
+		await waitFor(() => expect(changes).toHaveLength(2));
+
+		expect(checkboxes.map((checkbox) => checkbox.getAttribute('aria-checked'))).toEqual([
+			'true',
+			'true',
+			'true',
+		]);
+		expect(changes).toEqual([{read: true}, {read: true, create: true, edit: true}]);
+	});
+
+	test('reads refreshed defaults after a pending make-default before saving a range', async () => {
+		const makeDefault = deferred();
+		const changes: Array<Record<string, boolean | null>> = [];
+		const view = render(
+			<ConnectionAccess
+				actions={actions}
+				defaults={[]}
+				own={{read: true, create: true, edit: false}}
+				onChange={(next) => {
+					changes.push(next);
+					return Promise.resolve();
+				}}
+				onMakeDefault={() => makeDefault.promise}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole('checkbox', {name: /^Edit/}));
+		await act(async () => Promise.resolve());
+		fireEvent.click(
+			screen.getAllByRole('button', {name: 'Make this the default for every agent'})[0]!,
+		);
+		await act(async () => Promise.resolve());
+		fireEvent.click(screen.getByRole('checkbox', {name: /^Read/}), {shiftKey: true});
+		await act(async () => Promise.resolve());
+
+		expect(changes).toEqual([{edit: true}]);
+
+		view.rerender(
+			<ConnectionAccess
+				actions={actions}
+				defaults={['read']}
+				own={{create: true, edit: false}}
+				onChange={(next) => {
+					changes.push(next);
+					return Promise.resolve();
+				}}
+				onMakeDefault={() => Promise.resolve()}
+			/>,
+		);
+		await act(async () => makeDefault.resolve());
+
+		expect(changes).toEqual([{edit: true}, {read: false, create: null}]);
+	});
+
 	test('shows a change immediately while it is saved and keeps the refreshed value', async () => {
 		const save = deferred();
 		const changes: Array<Record<string, boolean | null>> = [];
