@@ -11,6 +11,7 @@ const connection = (id: string, integrationId: string, account: string): Connect
 	tools: null,
 	name: null,
 	unavailable: [],
+	signInNeeded: false,
 });
 
 const connections = [

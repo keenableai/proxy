@@ -16,6 +16,7 @@ const google: Connection = {
 	tools: null,
 	name: null,
 	unavailable: [],
+	signInNeeded: false,
 };
 
 afterEach(() => {
@@ -36,6 +37,7 @@ function renderCatalog(args: {
 				configured={{google: args.google ?? true, plaid: args.plaid ?? true}}
 				experiments={[]}
 				onConnectForm={args.onConnectForm ?? mock()}
+				onConnected={mock()}
 			/>
 		</TooltipProvider>,
 	);
@@ -70,6 +72,21 @@ describe('IntegrationCatalog', () => {
 
 		expect(row.getByRole('link').getAttribute('href')).toBe('/api/connections/google/start');
 		expect(row.queryByText(/GOOGLE_CLIENT_ID/)).toBeNull();
+	});
+
+	test('Exa is signed in to with the row, and its key opens the API key dialog', () => {
+		const row = renderCatalog({name: 'Exa'});
+
+		expect(row.getByRole('link').getAttribute('href')).toBe('/api/connections/exa/start');
+		// Its plus is a link of its own, since the key sits before it.
+		expect(row.getByRole('button', {name: 'Sign in with Exa'}).getAttribute('href')).toBe(
+			'/api/connections/exa/start',
+		);
+		fireEvent.click(row.getByRole('button', {name: 'Connect Exa with an API key'}));
+		expect(screen.getByRole('dialog').textContent).toContain('Connect Exa with an API key');
+		expect(screen.getByRole('link', {name: 'dashboard.exa.ai'}).getAttribute('href')).toBe(
+			'https://dashboard.exa.ai/api-keys',
+		);
 	});
 
 	test('a bank without Plaid’s keys on the server is greyed out, saying what to set', () => {

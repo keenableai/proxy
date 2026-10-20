@@ -18,13 +18,12 @@ import {handleDevLoginRoute} from '../auth/dev-login';
 import {handleEmailSignInRoute, handleEmailVerifyRoute} from '../auth/email';
 import {handleGoogleCallbackRoute, handleGoogleStartRoute, handleSignInMethodsRoute} from '../auth/google';
 import {handleSignOutRoute} from '../auth/signout';
+import {BUILT_IN_MCP} from '../connections/built-in-mcp';
 import {handleConnectCustomMcpRoute, handleCustomMcpCallbackRoute, handleRefreshCustomMcpToolsRoute} from '../connections/custom/route';
 import {handleConnectEmailRoute, handleTestEmailRoute} from '../connections/email/route';
 import {handleGoogleCallbackRoute as handleConnectGoogleCallbackRoute, handleStartGoogleRoute} from '../connections/google/route';
-import {handleGranolaCallbackRoute, handleStartGranolaRoute} from '../connections/granola/route';
-import {handleLinearCallbackRoute, handleStartLinearRoute} from '../connections/linear/route';
+import {keyConnectRoute, mcpConnectRoutes} from '../connections/mcp/mcp-connect';
 import {handleConnectMysqlRoute, handleTestMysqlRoute} from '../connections/mysql/route';
-import {handleNotionCallbackRoute, handleStartNotionRoute} from '../connections/notion/route';
 import {handleConnectPlaidRoute, handleCreatePlaidLinkTokenRoute} from '../connections/plaid/route';
 import {handleConnectPostgresRoute, handleTestPostgresRoute} from '../connections/postgres/route';
 import {handleDeleteConnectionRoute, handleGetConnectionRoute, handleListConnectionsRoute, handleRenameConnectionRoute, handleSetConnectionDefaultsRoute} from '../connections/route';
@@ -78,12 +77,17 @@ export function createApiRouter(): express.Router {
 	router.post('/api/connections/email/test', withAuthResult('Test email route', handleTestEmailRoute));
 	router.get('/api/connections/google/start', withAuth('Start Google sign-in route', handleStartGoogleRoute));
 	router.get('/api/connections/google/callback', withAuth('Google sign-in callback route', handleConnectGoogleCallbackRoute));
-	router.get('/api/connections/granola/start', withAuth('Start Granola sign-in route', handleStartGranolaRoute));
-	router.get('/api/connections/granola/callback', withAuth('Granola sign-in callback route', handleGranolaCallbackRoute));
-	router.get('/api/connections/notion/start', withAuth('Start Notion sign-in route', handleStartNotionRoute));
-	router.get('/api/connections/notion/callback', withAuth('Notion sign-in callback route', handleNotionCallbackRoute));
-	router.get('/api/connections/linear/start', withAuth('Start Linear sign-in route', handleStartLinearRoute));
-	router.get('/api/connections/linear/callback', withAuth('Linear sign-in callback route', handleLinearCallbackRoute));
+	// Every integration built on its MCP server signs in the same way, from its declaration, and
+	// takes an API key the same way where its server does.
+	for (const builtIn of BUILT_IN_MCP) {
+		const {handleStart, handleCallback} = mcpConnectRoutes(builtIn);
+		const {integrationId, server} = builtIn;
+		router.get(`/api/connections/${integrationId}/start`, withAuth(`Start ${server.name} sign-in route`, handleStart));
+		router.get(`/api/connections/${integrationId}/callback`, withAuth(`${server.name} sign-in callback route`, handleCallback));
+		if (builtIn.apiKey) {
+			router.post(`/api/connections/${integrationId}`, withAuthResult(`Connect ${server.name} with an API key route`, keyConnectRoute(builtIn)));
+		}
+	}
 	router.post('/api/connections/plaid', withAuthResult('Connect Plaid route', handleConnectPlaidRoute));
 	router.post('/api/connections/plaid/link-token', withAuthResult('Create Plaid Link token route', handleCreatePlaidLinkTokenRoute));
 	router.post('/api/connections/postgres', withAuthResult('Connect Postgres route', handleConnectPostgresRoute));
