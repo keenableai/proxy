@@ -87,6 +87,7 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: 'claude',
 		name: 'Claude',
+		aliases: ['Claude Duet'],
 		company: 'Anthropic',
 		connects: 'mcp',
 		local: false,

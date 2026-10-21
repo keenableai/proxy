@@ -1,13 +1,13 @@
 ---
 title: Connect an agent over MCP
-description: Add Personal Agent Proxy to Claude, Claude Code, Claude Desktop, ChatGPT, Hermes Agent, Poke or any other MCP client as an MCP server, and what an agent can do through it.
+description: Add Personal Agent Proxy to Claude, Claude Duet, Claude Code, Claude Desktop, ChatGPT, Hermes Agent, Poke or any other MCP client as an MCP server, and what an agent can do through it.
 ---
 
-Personal Agent Proxy is an MCP server. An agent that speaks MCP, such as Claude, Claude Code,
-Claude Desktop, ChatGPT, Hermes Agent, Poke or any other MCP client, connects to it, signs in with
-OAuth, and works as one of your agent logins: it can do what that login is allowed and nothing
-more. Successful connection actions and actions denied by access settings are in the activity log,
-with the task they were made for.
+Personal Agent Proxy is an MCP server. An agent that speaks MCP, such as Claude, Claude Duet,
+Claude Code, Claude Desktop, ChatGPT, Hermes Agent, Poke or any other MCP client, connects to it,
+signs in with OAuth, and works as one of your agent logins: it can do what that login is allowed
+and nothing more. Successful connection actions and actions denied by access settings are in the
+activity log, with the task they were made for.
 
 The server is at your Personal Agent Proxy's address with `/mcp` after it, such as
 `https://app.personalagentproxy.com/mcp`. Each agent's page in Personal Agent Proxy shows it under
@@ -19,7 +19,12 @@ The server is at your Personal Agent Proxy's address with `/mcp` after it, such 
 
 Add the address as a custom connector, or custom MCP server, where the agent keeps them:
 
-- **Claude**: open **Connectors** and add a custom connector with the address.
+- **Claude and Claude Duet**: in Claude, open **Customize**, **Connectors**, and add a custom
+  connector. Enter a name and the address, choose **Sign in now**, then choose **Register
+  automatically** under **OAuth client**. When Personal Agent Proxy opens, choose **Claude**. Duet
+  uses the same account-wide connectors as Claude, so they share one login, its access,
+  and its activity history. During the research preview, Anthropic offers Duet by waitlist to Pro
+  and Max subscribers in the US.
 - **Claude Code**: run the setup command shown on the agent's page. It begins
   `claude mcp add --transport http personal-agent-proxy` and ends with the server address.
 - **Claude Desktop**: open **Connectors** and add a custom connector with the address.
@@ -109,7 +114,7 @@ every app working as it, as well as its sign-in to the agent pages.
 
 <Callout>
 A self-hosted Personal Agent Proxy has to be reachable from the internet over HTTPS for Claude,
-Claude Desktop, ChatGPT and Poke to connect to it: they call it from their own servers, not from
-your computer. Claude Code and Hermes Agent can instead connect to one running on the same
-computer, including over localhost.
+Claude Duet, Claude Desktop, ChatGPT and Poke to connect to it: they call it from their own servers,
+not from your computer. Claude Code and Hermes Agent can instead connect to one running on the
+same computer, including over localhost.
 </Callout>

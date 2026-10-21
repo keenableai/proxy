@@ -261,6 +261,7 @@ const MCP_STEPS: Partial<
 		{
 			where: string;
 			url?: string;
+			openLabel?: string;
 			command?: (serverUrl: string) => string;
 			afterAdd?: string;
 			authorize?: string;
@@ -268,8 +269,14 @@ const MCP_STEPS: Partial<
 	>
 > = {
 	claude: {
-		where: 'In Claude, open Settings, then Connectors, and choose Add custom connector.',
-		url: 'https://claude.ai/settings/connectors',
+		where:
+			'In Claude, open Customize, then Connectors, and choose Add custom connector. Claude Duet uses the same connectors as Claude.',
+		url: 'https://claude.ai/customize/connectors',
+		openLabel: 'Claude',
+		afterAdd:
+			'Name the connector, paste the server address, and continue. Choose Sign in now, then choose Register automatically under OAuth client.',
+		authorize:
+			'Claude opens Personal Agent Proxy to sign in. Choose Claude when asked which agent it works as. That login gives Claude and Claude Duet the same access and activity history.',
 	},
 	'claude-code': {
 		where: 'Run the command above in a terminal.',
@@ -359,7 +366,7 @@ function McpAgent({
 							rel="noreferrer"
 							className="underline underline-offset-4"
 						>
-							Open {provider.name}
+							Open {steps.openLabel ?? provider.name}
 						</a>
 					)}
 				</li>

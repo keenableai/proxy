@@ -30,6 +30,17 @@ describe('agent providers', () => {
 		}
 	});
 
+	test('uses the same Claude Duet logo on the website and in the README', async () => {
+		const websiteLogo = await Bun.file(
+			new URL('../../website/public/logos/claude-duet.png', import.meta.url),
+		).bytes();
+		const readmeLogo = await Bun.file(
+			new URL('../../../docs/assets/agents/claude-duet.png', import.meta.url),
+		).bytes();
+
+		expect(websiteLogo).toEqual(readmeLogo);
+	});
+
 	test('finds a provider by id', () => {
 		expect(findAgentProvider('dot')?.name).toBe('Dots');
 		expect(findAgentProvider('other')).toBeUndefined();
@@ -37,6 +48,7 @@ describe('agent providers', () => {
 
 	test("suggests the provider an MCP client's name points at", () => {
 		expect(suggestAgentProvider('Claude')?.id).toBe('claude');
+		expect(suggestAgentProvider('Claude Duet')?.id).toBe('claude');
 		expect(suggestAgentProvider('Claude Code')?.id).toBe('claude-code');
 		expect(suggestAgentProvider('Claude Desktop')?.id).toBe('claude-desktop');
 		expect(suggestAgentProvider('Hermes Agent')?.id).toBe('hermes');
