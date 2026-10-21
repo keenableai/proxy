@@ -20,6 +20,9 @@ export type AuditEntryRow = {
 	// The agent's task it was for (task.ts); none for entries from before tasks, and for what
 	// Personal Agent Proxy did itself.
 	taskId: string | null;
+	// How long the request took, from when it came in to when it was logged; none for entries from
+	// before this was kept, and for what Personal Agent Proxy did itself.
+	durationMs: number | null;
 	createdAt: Date;
 };
 
@@ -36,10 +39,13 @@ export async function logAgentRequest(data: {
 	via: AuditVia;
 	// PRE-TASK CLIENTS: null for a call of an MCP client from before tasks (api's mcp/pre-task-clients.ts).
 	taskId: string | null;
+	// When the request came in, in ms since the epoch, so the entry says how long it took.
+	startedAt: number;
 }): Promise<Result<void, ApiError>> {
+	const {startedAt, ...entry} = data;
 	return wrapDb(async () => {
 		await db.$transaction([
-			db.auditEntry.create({data}),
+			db.auditEntry.create({data: {...entry, durationMs: Date.now() - startedAt}}),
 			db.agent.update({where: {id: data.agentId}, data: {lastActiveAt: new Date()}}),
 		]);
 	});
@@ -58,7 +64,14 @@ export async function logProxyAction(data: {
 }): Promise<Result<void, ApiError>> {
 	return wrapDb(async () => {
 		await db.auditEntry.create({
-			data: {...data, agentId: null, query: null, outcome: 'allowed', taskId: null},
+			data: {
+				...data,
+				agentId: null,
+				query: null,
+				outcome: 'allowed',
+				taskId: null,
+				durationMs: null,
+			},
 		});
 	});
 }
@@ -93,6 +106,7 @@ export async function listAuditEntries(
 				outcome: true,
 				via: true,
 				taskId: true,
+				durationMs: true,
 				createdAt: true,
 			},
 		}),
