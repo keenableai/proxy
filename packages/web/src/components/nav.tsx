@@ -1,7 +1,7 @@
 import {
 	BotIcon,
 	HomeIcon,
-	IdCardIcon,
+	LibraryIcon,
 	LogOutIcon,
 	PlugIcon,
 	ScrollTextIcon,
@@ -28,7 +28,7 @@ type Destination = {to: string; label: string; icon: LucideIcon};
 const DESTINATIONS: Destination[] = [
 	{to: '/', label: 'Home', icon: HomeIcon},
 	{to: '/connections', label: 'Connections', icon: PlugIcon},
-	{to: '/info', label: 'Information', icon: IdCardIcon},
+	{to: '/vault', label: 'Vault', icon: LibraryIcon},
 	{to: '/agents', label: 'Agents', icon: BotIcon},
 	{to: '/activity', label: 'Activity', icon: ScrollTextIcon},
 ];
