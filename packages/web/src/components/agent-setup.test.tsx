@@ -123,6 +123,21 @@ describe('AgentSetup', () => {
 		expect(screen.getByText(/Claude Code opens Personal Agent Proxy to sign in/)).toBeDefined();
 	});
 
+	test('adds Claude and Claude Duet through their shared Claude account connector', () => {
+		renderAgentSetup('claude');
+
+		expect(screen.getByText(/Claude Duet uses the same connectors as Claude/)).toBeDefined();
+		expect(screen.getByRole('link', {name: 'Open Claude'}).getAttribute('href')).toBe(
+			'https://claude.ai/customize/connectors',
+		);
+		expect(screen.getByText(/choose Register automatically under OAuth client/)).toBeDefined();
+		expect(
+			screen.getByText(
+				/That login gives Claude and Claude Duet the same access and activity history/,
+			),
+		).toBeDefined();
+	});
+
 	test('adds a custom MCP agent, however many there are already', () => {
 		const router = renderAgentChoice([customAgent('agent-1', 'Cursor')]);
 
