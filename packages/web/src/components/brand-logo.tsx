@@ -1,5 +1,4 @@
 import {findAgentProvider} from '@proxy/integrations';
-import {BotIcon} from 'lucide-react';
 import {cn} from '@proxy/ui/lib/utils';
 import {useState, type ReactNode} from 'react';
 import type {Integration} from '@/lib/integrations';
@@ -20,13 +19,13 @@ function LogoTile({children, className}: {children: ReactNode; className?: strin
 	);
 }
 
-// A custom agent has no logo of its own, so it gets a robot.
+// A custom MCP agent is connected through Personal Agent Proxy, so it gets our mark.
 export function AgentLogo({providerId, className}: {providerId: string; className?: string}) {
 	const provider = findAgentProvider(providerId);
 	if (provider?.custom) {
 		return (
 			<LogoTile className={className}>
-				<BotIcon className="size-[60%] text-neutral-500" />
+				<img src="/favicon.svg" alt="" className="size-full object-contain p-[2px]" />
 			</LogoTile>
 		);
 	}
