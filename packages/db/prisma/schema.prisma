@@ -37,6 +37,9 @@ model User {
   accounts     Account[]
   sessions     Session[]
   orgMembers   OrgMember[]
+  ownedOrgs    Organization[]
+  connections  Connection[]
+  agents       Agent[]
   writeTargets WriteTarget[]
 }
 
@@ -86,12 +89,16 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-// Every user gets one organization at sign-up, for when data is shared between people. Nothing
-// reads it yet.
+// People working together: every user gets one at sign-up and can make more or be invited into
+// others'. Each has one owner, whoever made it, for good, who is also one of its members; it goes
+// with their account, and the last one they own can't go before it, so everyone owns one. Its
+// `slug` is its address in the web app and the api (`/acme/connections`, `/api/orgs/acme/…`),
+// fixed when it is made.
 model Organization {
   id          String    @id @default(cuid())
   name        String
   slug        String    @unique
+  ownerUserId String
   // When the welcome flow was finished or skipped; until then the web app shows it instead of the app.
   onboardedAt DateTime?
   // Experiments on for the organization, by id (EXPERIMENTS in @proxy/utils; an id no longer there
@@ -102,14 +109,20 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
+  owner       User            @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
   members     OrgMember[]
+  invitations Invitation[]
   connections Connection[]
   agents      Agent[]
   audit       AuditEntry[]
   feedback    AgentFeedback[]
   tasks       AgentTask[]
+
+  @@index([ownerUserId])
 }
 
+// A person in an organization: its owner (`Organization.ownerUserId`), who renames and deletes
+// it, invites people and removes members, or anyone else, who can leave.
 model OrgMember {
   id     String @id @default(cuid())
   orgId  String
@@ -121,13 +134,34 @@ model OrgMember {
   org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([orgId, userId])
   @@index([orgId])
   @@index([userId])
 }
 
+// Someone asked into an organization by email: the link sent them signs them in or up and makes
+// them a member. Only the token's SHA-256 is kept; taking it up deletes it.
+model Invitation {
+  id          String   @id @default(cuid())
+  orgId       String
+  email       String
+  tokenHash   String   @unique
+  // A plain id: the invitation stays when whoever sent it is gone.
+  invitedById String
+  expires     DateTime
+
+  createdAt DateTime @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+}
+
 // A connected account of an integration from the catalog (`@proxy/integrations`), such as a
-// mailbox. An organization can connect the same integration more than once. Every organization
-// also has one built-in vault connection, made with it, whose entries live in Personal Agent Proxy.
+// mailbox. An organization can connect the same integration more than once. A connection is either
+// one member's, which nobody else in the organization sees, or shared with every member of it; one
+// that is shared stays shared. Every member also has their own built-in vault connection in each
+// organization, made when they join it, whose entries live in Personal Agent Proxy.
 model Connection {
   id                String  @id @default(cuid())
   orgId             String
@@ -146,17 +180,26 @@ model Connection {
   // What the person called the connection, where they named it: a custom MCP server is named when
   // it is connected. Null for every other integration, which shows as its integration.
   name              String?
+  // The member whose connection it is, which nobody else in the organization sees; null for one
+  // shared with every member of it.
+  ownerUserId       String?
+  // Who connected it, kept once it is shared: who a sign-in acts as, and who may change it beside
+  // the organization's owner. A plain id rather than a relation, so a shared connection stays when
+  // they are gone.
+  connectedById     String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
   org          Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  owner        User?               @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
   defaults     ConnectionDefault[]
   vaultEntries VaultEntry[]
   agentGrants  AgentGrant[]
   writeTargets WriteTarget[]
 
   @@index([orgId])
+  @@index([ownerUserId])
   @@index([integrationId, providerAccountId])
 }
 
@@ -214,31 +257,40 @@ model VaultEntry {
   @@index([connectionId, collectionId])
 }
 
-// A login handed to an AI agent. The password is shown once, when it is made or reset; only its
-// hash is kept.
+// A login handed to an AI agent, in one organization: a member's own, which reaches the
+// organization's shared connections and that member's own, or shared with every member of it,
+// which reaches the shared connections alone; one that is shared stays shared. The password is
+// shown once, when it is made or reset; only its hash is kept.
 model Agent {
   id           String    @id @default(cuid())
   orgId        String
-  // One of the catalog's AGENT_PROVIDERS. A provider's login is named by the provider, so an
-  // organization has one per provider; custom agents are named by the person, one per name.
+  // One of the catalog's AGENT_PROVIDERS, of which there can be any number of logins, each named by
+  // the person or after the provider.
   providerId   String
   name         String
   username     String    @unique
   passwordHash String
   lastActiveAt DateTime?
   revokedAt    DateTime?
+  // The member whose agent it is, which nobody else in the organization sees; null for one shared
+  // with every member of it.
+  ownerUserId  String?
+  // Who made it, kept once it is shared: who may change it beside the organization's owner. A plain
+  // id rather than a relation, so a shared agent stays when they are gone.
+  createdById  String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
   org         Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  owner       User?          @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
   grants      AgentGrant[]
   sessions    AgentSession[]
   oauthCodes  OAuthCode[]
   oauthGrants OAuthGrant[]
 
-  @@unique([orgId, providerId, name])
   @@index([orgId])
+  @@index([ownerUserId])
 }
 
 // An agent's own setting for one action of a connection, on or off, where it differs from the
@@ -314,6 +366,13 @@ model AuditEntry {
   // every entry logged since this was kept; none for the entries from before, and for what
   // Personal Agent Proxy did itself.
   durationMs   Int?
+  // Whose log it is: the member whose own the agent is, or whose own the connection was for what
+  // Personal Agent Proxy did itself; null for a shared agent's or a shared connection's, which
+  // everyone in the organization sees.
+  ownerUserId  String?
+  // The member who asked for what Personal Agent Proxy did itself, as a plain id, so the entry
+  // stays when they are gone; null for an agent's request.
+  userId       String?
   // What went wrong, for a failed request: the api's kind of error, such as `credentials_rejected`,
   // and the provider's HTTP status after it where it answered with one, such as
   // `provider_unreachable 429`. None for every other outcome.
@@ -350,6 +409,9 @@ model AgentTask {
   // What was done or found, as the agent said when it finished, where it said; what a sub-task
   // handed back.
   outcome    String?
+  // The member whose own the agent is, who alone sees the task; null for a shared agent's, which
+  // everyone in the organization sees.
+  ownerUserId String?
 
   createdAt DateTime @default(now())
 
@@ -416,6 +478,8 @@ model OAuthCode {
   codeHash      String   @unique
   clientId      String
   agentId       String
+  // The member who signed the client in, as a plain id.
+  userId        String
   redirectUri   String
   codeChallenge String
   expires       DateTime
@@ -430,11 +494,16 @@ model OAuthCode {
 }
 
 // A client signed in as an agent: its access token and refresh token, by their SHA-256.
-// Refreshing replaces both. Disconnecting it, or revoking or deleting the agent, ends it.
+// Refreshing replaces both. Disconnecting it, revoking or deleting the agent, or the member who
+// signed it in leaving the organization, ends it.
 model OAuthGrant {
   id               String   @id @default(cuid())
   clientId         String
   agentId          String
+  // The member who signed the client in, as a plain id, so the grant stays when they are gone:
+  // they see and sign out their own clients on a shared agent, and leaving the organization signs
+  // them out.
+  userId           String
   accessTokenHash  String   @unique
   accessExpires    DateTime
   refreshTokenHash String   @unique
@@ -448,4 +517,5 @@ model OAuthGrant {
 
   @@index([clientId])
   @@index([agentId])
+  @@index([userId])
 }

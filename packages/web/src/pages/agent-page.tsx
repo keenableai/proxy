@@ -1,9 +1,10 @@
-import {findAgentProvider} from '@proxy/integrations';
+import {AGENT_NAME_MAX, findAgentProvider} from '@proxy/integrations';
 import type {FetchError} from '@proxy/utils';
 import {
 	BanIcon,
 	ChevronRightIcon,
 	KeyRoundIcon,
+	PencilIcon,
 	RotateCcwIcon,
 	SearchIcon,
 	Trash2Icon,
@@ -15,8 +16,10 @@ import type {Result} from 'ts-results-es';
 import {
 	deleteAgent,
 	disconnectMcpClient,
+	renameAgent,
 	setAgentGrants,
 	setAgentRevoked,
+	shareAgent,
 	type McpClient,
 } from '@/client/agents-client';
 import {setConnectionDefaults} from '@/client/connections-client';
@@ -28,57 +31,69 @@ import {ConfirmDialog} from '@/components/confirm-dialog';
 import {ConnectionAccess} from '@/components/connection-access';
 import {IconButton} from '@/components/icon-button';
 import {NotFound} from '@/components/not-found';
+import {RenameDialog} from '@/components/rename-dialog';
 import {EmptyRows, RowList} from '@/components/row-list';
 import {Section} from '@/components/section';
+import {Sharing} from '@/components/sharing';
 import {Checkbox} from '@proxy/ui/components/checkbox';
 import {Input} from '@proxy/ui/components/input';
+import {useApply} from '@/hooks/use-apply';
+import {useHuman} from '@/hooks/use-human';
 import {connectionLabel, defaultActions, integrationOf, ownSettings} from '@/lib/access';
 import {cn} from '@proxy/ui/lib/utils';
 import {formatDate} from '@/lib/format';
-import {describeFetchError} from '@/lib/loader-utils';
+import {describeApiError, describeFetchError} from '@/lib/loader-utils';
+import {hasOtherPeople, manages} from '@/lib/orgs';
 import type {AgentLogin, Connection} from '@/lib/types';
 import type {agentLoader} from '@/loaders';
+import {useOrgSlug} from '@/hooks/use-org';
 
 const RECENT = 10;
 
 type Confirming = 'revoke' | 'delete' | null;
 
 // One agent login: what it can reach, and what it did. Handing it its login is setup's
-// (`/agents/:id/setup`), done once. Keyed by the agent, so the access filter and what is folded
-// out start over for each.
+// (`/agents/:id/setup`), done once. A shared agent is changed by whoever made it and the
+// organization's owner; everyone else sees it as it is. Keyed by the agent, so the access filter
+// and what is folded out start over for each.
 export function AgentPage() {
 	const {id = ''} = useParams();
 	return <AgentDetail key={id} id={id} />;
 }
 
 function AgentDetail({id}: {id: string}) {
+	const org = useOrgSlug();
 	const {agent, connections, agents, entries, tasks, mcpClients} =
 		useLoaderData<typeof agentLoader>();
 	const navigate = useNavigate();
 	const revalidator = useRevalidator();
 	const [confirming, setConfirming] = useState<Confirming>(null);
+	const [renaming, setRenaming] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	if (!agent || agent.id !== id) {
-		return <NotFound what="agent" back="/agents" backLabel="Back to agents" />;
+	const apply = useApply(setError);
+	const human = useHuman();
+	if (!agent || agent.id !== id || !human) {
+		return <NotFound what="agent" back={`/${org}/agents`} backLabel="Back to agents" />;
 	}
 
 	const revoked = agent.revokedAt !== null;
+	const activeOrg = human.org;
+	const mayChange = manages(human, agent);
+	const createdBy =
+		!agent.shared || agent.createdById === human.user.id
+			? 'You'
+			: (agent.createdBy ?? 'A former member');
+	// A shared agent reaches the connections shared with everyone alone.
+	const reachable = agent.shared
+		? connections.filter((connection) => connection.shared)
+		: connections;
 	const company = findAgentProvider(agent.providerId)?.company ?? agent.providerId;
-	const apply = async <T,>(change: Promise<Result<T, FetchError>>) => {
-		const result = await change;
-		if (result.isErr()) {
-			setError(describeFetchError(result.error));
-			return;
-		}
-		setError(null);
-		await revalidator.revalidate();
-	};
 
 	return (
 		<AppShell
 			title={
 				<>
-					<BackButton to="/agents" label="Back to agents" />
+					<BackButton to={`/${org}/agents`} label="Back to agents" />
 					<PageTitle
 						detail={
 							revoked
@@ -94,28 +109,33 @@ function AgentDetail({id}: {id: string}) {
 				</>
 			}
 			actions={
-				<>
-					{!revoked && (
-						<IconButton label="Set up again" to={`/agents/${agent.id}/setup`}>
-							<KeyRoundIcon />
+				mayChange && (
+					<>
+						<IconButton label="Rename agent" onClick={() => setRenaming(true)}>
+							<PencilIcon />
 						</IconButton>
-					)}
-					{revoked ? (
-						<IconButton
-							label="Restore login"
-							onClick={() => void apply(setAgentRevoked(agent.id, false))}
-						>
-							<RotateCcwIcon />
+						{!revoked && (
+							<IconButton label="Set up again" to={`/${org}/agents/${agent.id}/setup`}>
+								<KeyRoundIcon />
+							</IconButton>
+						)}
+						{revoked ? (
+							<IconButton
+								label="Restore login"
+								onClick={() => void apply(setAgentRevoked(org, agent.id, false))}
+							>
+								<RotateCcwIcon />
+							</IconButton>
+						) : (
+							<IconButton label="Revoke login" onClick={() => setConfirming('revoke')}>
+								<BanIcon />
+							</IconButton>
+						)}
+						<IconButton label="Delete agent" onClick={() => setConfirming('delete')}>
+							<Trash2Icon />
 						</IconButton>
-					) : (
-						<IconButton label="Revoke login" onClick={() => setConfirming('revoke')}>
-							<BanIcon />
-						</IconButton>
-					)}
-					<IconButton label="Delete agent" onClick={() => setConfirming('delete')}>
-						<Trash2Icon />
-					</IconButton>
-				</>
+					</>
+				)
 			}
 		>
 			<div className="flex flex-col gap-8">
@@ -124,28 +144,55 @@ function AgentDetail({id}: {id: string}) {
 					<Section title="MCP">
 						<McpClients
 							clients={mcpClients}
-							onDisconnect={(clientId) => void apply(disconnectMcpClient(agent.id, clientId))}
+							mayChange={mayChange}
+							onDisconnect={(clientId) => void apply(disconnectMcpClient(org, agent.id, clientId))}
 						/>
 					</Section>
 				)}
-				<Section title="Access" detail={changedDetail(agent)}>
+				<Section
+					title="Access"
+					detail={
+						agent.shared && !mayChange
+							? 'changed by whoever made it and the owner'
+							: changedDetail(agent)
+					}
+				>
 					<AccessGrid
 						agent={agent}
-						connections={connections}
+						connections={reachable}
+						readOnly={!mayChange}
+						setsDefaults={(connection) => manages(human, connection)}
 						onChange={(connectionId, actions) =>
-							apply(setAgentGrants(agent.id, connectionId, actions))
+							apply(setAgentGrants(org, agent.id, connectionId, actions))
 						}
 						onMakeDefault={(connectionId, actionId, allowed) =>
-							apply(makeDefault(agent.id, connectionId, actionId, allowed))
+							apply(makeDefault(org, agent.id, connectionId, actionId, allowed))
 						}
 					/>
 				</Section>
+				<Sharing
+					orgName={activeOrg.name}
+					shared={agent.shared}
+					what="agent"
+					rows={[
+						{
+							label: 'Reaches',
+							value: agent.shared
+								? `The connections shared with ${activeOrg.name}`
+								: `The connections shared with ${activeOrg.name}, and your own`,
+						},
+						{label: 'Made by', value: createdBy},
+					]}
+					alone={!hasOtherPeople(activeOrg)}
+					confirmDescription={`Everyone in ${activeOrg.name} sees ${agent.name} and can give its login to their own tools. It reaches only the connections shared with everyone from then on, so its settings on your own connections are dropped. Its tasks and activity so far become everyone's too, except what it did on your own connections, which stays yours. Whoever made it and the organization's owner change it. This can't be undone.`}
+					onShare={() => apply(shareAgent(org, agent.id))}
+				/>
 				<Section
 					title="Recent activity"
 					detail={
 						entries.length > RECENT ? (
 							<Link
-								to={`/activity?agent=${agent.id}`}
+								to={`/${org}/activity?agent=${agent.id}`}
 								className="underline-offset-4 hover:text-foreground hover:underline"
 							>
 								Go to all activity
@@ -162,6 +209,25 @@ function AgentDetail({id}: {id: string}) {
 					/>
 				</Section>
 			</div>
+			{renaming && (
+				<RenameDialog
+					open
+					title={`Rename ${agent.name}`}
+					description="What this agent is called here, in the activity log and to the agent itself."
+					initial={agent.name}
+					allowEmpty={false}
+					maxLength={AGENT_NAME_MAX}
+					onClose={() => setRenaming(false)}
+					onSave={async (name) => {
+						const result = await renameAgent(org, agent.id, name);
+						if (result.isErr()) {
+							return describeApiError(result.error);
+						}
+						await revalidator.revalidate();
+						return null;
+					}}
+				/>
+			)}
 			<ConfirmDialog
 				open={confirming === 'revoke'}
 				title={`Revoke ${agent.name}?`}
@@ -169,7 +235,7 @@ function AgentDetail({id}: {id: string}) {
 				confirmLabel="Revoke"
 				destructive
 				onClose={() => setConfirming(null)}
-				onConfirm={() => void apply(setAgentRevoked(agent.id, true))}
+				onConfirm={() => void apply(setAgentRevoked(org, agent.id, true))}
 			/>
 			<ConfirmDialog
 				open={confirming === 'delete'}
@@ -179,26 +245,36 @@ function AgentDetail({id}: {id: string}) {
 				destructive
 				onClose={() => setConfirming(null)}
 				onConfirm={async () => {
-					const result = await deleteAgent(agent.id);
+					const result = await deleteAgent(org, agent.id);
 					if (result.isErr()) {
 						setError(describeFetchError(result.error));
 						return;
 					}
-					navigate('/agents');
+					navigate(`/${org}/agents`);
 				}}
 			/>
 		</AppShell>
 	);
 }
 
-// The MCP clients, such as Claude, that signed in as this agent, each to be signed out on its own.
+// The MCP clients, such as Claude, that signed in as this agent: every one for whoever manages the
+// agent, with who signed each in; the person's own for anyone else. Each is signed out on its own,
+// by whoever manages the agent or signed it in.
 function McpClients({
 	clients,
+	mayChange,
 	onDisconnect,
 }: {
 	clients: McpClient[];
+	mayChange: boolean;
 	onDisconnect: (clientId: string) => void;
 }) {
+	const connectedBy = (client: McpClient) => {
+		if (client.mine) {
+			return 'by you';
+		}
+		return `by ${client.connectedBy ?? 'a former member'}`;
+	};
 	return (
 		<RowList>
 			{clients.map((client) => (
@@ -206,10 +282,13 @@ function McpClients({
 					<span className="min-w-0 flex-1 truncate">{client.name}</span>
 					<span className="shrink-0 text-muted-foreground">
 						connected {formatDate(client.connectedAt)}
+						{mayChange && ` ${connectedBy(client)}`}
 					</span>
-					<IconButton label={`Disconnect ${client.name}`} onClick={() => onDisconnect(client.id)}>
-						<UnplugIcon />
-					</IconButton>
+					{(mayChange || client.mine) && (
+						<IconButton label={`Disconnect ${client.name}`} onClick={() => onDisconnect(client.id)}>
+							<UnplugIcon />
+						</IconButton>
+					)}
 				</li>
 			))}
 		</RowList>
@@ -219,16 +298,19 @@ function McpClients({
 // Makes an agent's own setting the connection's default, for every agent without one of its own,
 // and drops it, since it now matches the default.
 async function makeDefault(
+	org: string,
 	agentId: string,
 	connectionId: string,
 	actionId: string,
 	allowed: boolean,
 ): Promise<Result<void, FetchError>> {
-	const defaults = await setConnectionDefaults(connectionId, {[actionId]: allowed});
+	const defaults = await setConnectionDefaults(org, connectionId, {[actionId]: allowed});
 	if (defaults.isErr()) {
 		return defaults.map(() => undefined);
 	}
-	return (await setAgentGrants(agentId, connectionId, {[actionId]: null})).map(() => undefined);
+	return (await setAgentGrants(org, agentId, connectionId, {[actionId]: null})).map(
+		() => undefined,
+	);
 }
 
 // "3 changed": how many actions the agent has a setting of its own for.
@@ -242,6 +324,11 @@ function changedDetail(agent: AgentLogin): string | undefined {
 type GridProps = {
 	agent: AgentLogin;
 	connections: Connection[];
+	// Shown but not changed: a shared agent by a member who only sees it.
+	readOnly: boolean;
+	// Whether the person may change a connection's defaults, which making an agent's own setting
+	// the default does: the connection is theirs to change too.
+	setsDefaults: (connection: Connection) => boolean;
 	onChange: (connectionId: string, actions: Record<string, boolean | null>) => Promise<void>;
 	onMakeDefault: (connectionId: string, actionId: string, allowed: boolean) => Promise<void>;
 };
@@ -250,7 +337,14 @@ type GridProps = {
 // saying whether the agent follows its default or has changed something. A filter narrows them to
 // the connections, actions and groups of actions (Calendar) it names, and Changed only keeps the actions the agent has a setting of its own for; either opens
 // everything it keeps.
-function AccessGrid({agent, connections, onChange, onMakeDefault}: GridProps) {
+function AccessGrid({
+	agent,
+	connections,
+	readOnly,
+	setsDefaults,
+	onChange,
+	onMakeDefault,
+}: GridProps) {
 	const [query, setQuery] = useState('');
 	const [changedOnly, setChangedOnly] = useState(false);
 	const [opened, setOpened] = useState<Set<string>>(() => new Set());
@@ -345,9 +439,12 @@ function AccessGrid({agent, connections, onChange, onMakeDefault}: GridProps) {
 									unavailable={connection.unavailable}
 									signInNeeded={connection.signInNeeded}
 									own={own}
+									readOnly={readOnly}
 									onChange={(changes) => onChange(connection.id, changes)}
-									onMakeDefault={(actionId, allowed) =>
-										onMakeDefault(connection.id, actionId, allowed)
+									onMakeDefault={
+										readOnly || !setsDefaults(connection)
+											? undefined
+											: (actionId, allowed) => onMakeDefault(connection.id, actionId, allowed)
 									}
 								/>
 							)}

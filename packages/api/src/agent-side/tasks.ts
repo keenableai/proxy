@@ -71,7 +71,7 @@ export function startAgentTask(caller: AgentCaller, args: unknown): Promise<Resu
 		if (parentId !== null) {
 			$(await requireOpenTask(caller.agent, parentId));
 		}
-		const task = $(await createAgentTask({orgId: caller.agent.orgId, agentId: caller.agent.agentId, parentId, title, goal, via: caller.via}));
+		const task = $(await createAgentTask({orgId: caller.agent.orgId, agentId: caller.agent.agentId, ownerUserId: caller.agent.ownerUserId, parentId, title, goal, via: caller.via}));
 		// Only where the parent was finished, or abandoned, since it was checked above.
 		if (task === null) {
 			return $(Err(ApiErr.conflict(`Task ${parentId} is no longer under way. Start a new task for what you are doing now, and give its id as task.`)));

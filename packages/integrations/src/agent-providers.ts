@@ -43,9 +43,8 @@ export type AgentProvider = {
 	faviconUrl?: string;
 };
 
-// The agent products a person can connect. Most have one login each; a product with a
-// loginProviderId shares that provider's account-wide login. An organization can add any number
-// of custom agents.
+// The agent products a person can connect, any number of logins of each. A product with a
+// loginProviderId signs in through that provider's account, so its logins are that provider's.
 export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: 'grok-bot',
@@ -158,8 +157,8 @@ export function loginProviderIdFor(provider: AgentProvider): AgentProviderId {
 	return provider.loginProviderId ?? provider.id;
 }
 
-/** The longest name a custom agent can be given. */
-export const CUSTOM_AGENT_NAME_MAX = 60;
+/** The longest name an agent can be given. */
+export const AGENT_NAME_MAX = 60;
 
 /**
  * The provider an MCP client's registered name points at, such as "Claude" or "ChatGPT", so

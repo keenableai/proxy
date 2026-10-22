@@ -16,6 +16,9 @@ const agent: AgentLogin = {
 	providerId: 'claude',
 	name: 'Claude',
 	username: 'claude-1',
+	shared: false,
+	createdById: 'user-1',
+	createdBy: null,
 	createdAt: '2026-10-01T00:00:00.000Z',
 	lastActiveAt: null,
 	revokedAt: null,
@@ -25,6 +28,9 @@ const agent: AgentLogin = {
 const connection: Connection = {
 	id: 'connection-1',
 	integrationId: 'email',
+	shared: false,
+	connectedById: 'user-1',
+	connectedBy: null,
 	account: 'me@example.com',
 	defaults: [],
 	tools: null,
@@ -52,6 +58,8 @@ const entry: AuditEntry = {
 	action: 'archive',
 	recordTitle: 'Weekly digest',
 	query: null,
+	userId: null,
+	userName: null,
 	outcome: 'denied',
 	error: null,
 	via: 'mcp',
@@ -62,7 +70,7 @@ function renderList(entries: AuditEntry[]) {
 	const router = createMemoryRouter(
 		[
 			{
-				path: '/activity',
+				path: '/:org/activity',
 				element: (
 					<TooltipProvider>
 						<AuditList
@@ -75,7 +83,7 @@ function renderList(entries: AuditEntry[]) {
 				),
 			},
 		],
-		{initialEntries: ['/activity']},
+		{initialEntries: ['/org-1/activity']},
 	);
 	render(<RouterProvider router={router} />);
 }
@@ -91,11 +99,11 @@ describe('AuditList', () => {
 		const dialog = await screen.findByRole('dialog');
 		expect(within(dialog).getByText('Denied')).toBeDefined();
 		expect(within(dialog).getByRole('link', {name: 'Triage inbox'}).getAttribute('href')).toBe(
-			'/activity?task=task-1',
+			'/org-1/activity?task=task-1',
 		);
 		expect(within(dialog).getByText('Archive the newsletters')).toBeDefined();
 		expect(within(dialog).getByRole('link', {name: 'Claude'}).getAttribute('href')).toBe(
-			'/agents/agent-1',
+			'/org-1/agents/agent-1',
 		);
 		expect(within(dialog).getByText('me@example.com')).toBeDefined();
 		expect(within(dialog).getByText('Weekly digest')).toBeDefined();
@@ -114,6 +122,26 @@ describe('AuditList', () => {
 		expect(within(dialog).getByText('Failed')).toBeDefined();
 		expect(
 			within(dialog).getByText('The service turned it down for too many requests (HTTP 429)'),
+		).toBeDefined();
+	});
+
+	test('what Personal Agent Proxy did itself from the home page says who asked', async () => {
+		const byDana: AuditEntry = {
+			...entry,
+			id: 'entry-2',
+			agentId: null,
+			action: 'sendNew',
+			outcome: 'allowed',
+			via: 'web',
+			taskId: null,
+			userId: 'user-2',
+			userName: 'Dana',
+		};
+		renderList([byDana, {...byDana, id: 'entry-3', userName: null}]);
+
+		expect(await screen.findByRole('img', {name: 'Personal Agent Proxy for Dana'})).toBeDefined();
+		expect(
+			screen.getByRole('img', {name: 'Personal Agent Proxy for a former member'}),
 		).toBeDefined();
 	});
 });

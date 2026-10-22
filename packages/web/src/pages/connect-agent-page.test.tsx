@@ -5,6 +5,7 @@ import {cleanup, render, screen} from '@testing-library/react';
 import {createMemoryRouter, RouterProvider} from 'react-router';
 import type {AgentLogin} from '@/lib/types';
 import {ConnectAgentPage} from '@/pages/connect-agent-page';
+import {testOrg as org} from '@/test-org';
 
 afterEach(() => {
 	cleanup();
@@ -15,6 +16,9 @@ const claude: AgentLogin = {
 	providerId: 'claude',
 	name: 'Claude',
 	username: 'claude-k7q2',
+	shared: false,
+	createdById: 'user-1',
+	createdBy: null,
 	createdAt: '2026-10-01T00:00:00Z',
 	lastActiveAt: null,
 	revokedAt: null,
@@ -34,7 +38,10 @@ function renderConsent(agents: AgentLogin[]) {
 						redirectHost: 'claude.ai',
 						suggestedProviderId: 'claude',
 					},
+					orgs: [org],
+					org: org.slug,
 					agents,
+					pendingAgentId: null,
 				}),
 				element: <ConnectAgentPage />,
 			},

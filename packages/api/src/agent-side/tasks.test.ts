@@ -8,7 +8,7 @@ const listOpenAgentTasks = mock();
 
 mock.module('@proxy/db/task', () => ({createAgentTask, getAgentTask, finishAgentTask, listOpenAgentTasks}));
 
-const agent = {agentId: 'agent-1', orgId: 'org-1', providerId: 'claude', name: 'Claude', experiments: []};
+const agent = {agentId: 'agent-1', orgId: 'org-1', ownerUserId: 'user-1', providerId: 'claude', name: 'Claude', orgSlug: 'org-1', experiments: []};
 const caller = {agent, via: 'mcp' as const};
 const row = {
 	id: 'task-1',
@@ -38,7 +38,7 @@ describe('startAgentTask', () => {
 		const {startAgentTask} = await import('./tasks');
 		const result = await startAgentTask(caller, {title: ' Triage inbox ', goal: 'Archive the newsletters\n'});
 
-		expect(createAgentTask).toHaveBeenCalledWith({orgId: 'org-1', agentId: 'agent-1', parentId: null, title: 'Triage inbox', goal: 'Archive the newsletters', via: 'mcp'});
+		expect(createAgentTask).toHaveBeenCalledWith({orgId: 'org-1', agentId: 'agent-1', ownerUserId: 'user-1', parentId: null, title: 'Triage inbox', goal: 'Archive the newsletters', via: 'mcp'});
 		expect(getAgentTask).not.toHaveBeenCalled();
 		expect(result.unwrap()).toEqual(response);
 	});
@@ -71,7 +71,7 @@ describe('startAgentTask', () => {
 			const result = await startAgentTask(caller, {title: 'Triage inbox', goal: 'Archive the newsletters', parent: ' task-0 '});
 
 			expect(getAgentTask).toHaveBeenCalledWith('org-1', 'agent-1', 'task-0');
-			expect(createAgentTask).toHaveBeenCalledWith({orgId: 'org-1', agentId: 'agent-1', parentId: 'task-0', title: 'Triage inbox', goal: 'Archive the newsletters', via: 'mcp'});
+			expect(createAgentTask).toHaveBeenCalledWith({orgId: 'org-1', agentId: 'agent-1', ownerUserId: 'user-1', parentId: 'task-0', title: 'Triage inbox', goal: 'Archive the newsletters', via: 'mcp'});
 			expect(result.unwrap()).toEqual({...response, parent: 'task-0'});
 		});
 

@@ -1,6 +1,6 @@
 export {
 	AGENT_PROVIDERS,
-	CUSTOM_AGENT_NAME_MAX,
+	AGENT_NAME_MAX,
 	findAgentProvider,
 	loginProviderIdFor,
 	suggestAgentProvider,

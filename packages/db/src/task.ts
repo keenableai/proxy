@@ -5,6 +5,7 @@ import {type ApiError, wrapDb} from '@proxy/utils';
 import {TASK_ABANDONED_AFTER_MS} from '@proxy/utils/tasks';
 
 import {db} from '.';
+import {type Viewer, visibleTo} from './viewer';
 
 /** What an agent set out to do, as it named it when it started. */
 export type AgentTaskRow = {
@@ -38,11 +39,13 @@ const taskSelect = {
  * Starts a task for the agent: what it is called and what the person asked for, and the agent's
  * task it is a sub-task of, where it is one. The parent is locked while the sub-task is made, so it
  * can't be finished in between and leave the sub-task open; `Ok(null)` means it is no longer under
- * way, finished or abandoned (@proxy/utils/tasks).
+ * way, finished or abandoned (@proxy/utils/tasks). `ownerUserId` is the member whose own the agent
+ * is, who alone sees the task; null for a shared agent's.
  */
 export async function createAgentTask(data: {
 	orgId: string;
 	agentId: string;
+	ownerUserId: string | null;
 	parentId: string | null;
 	title: string;
 	goal: string;
@@ -159,19 +162,19 @@ export async function listOpenAgentTasks(
 }
 
 /**
- * The organization's tasks under way at some point since `from`: started before now and not
- * finished before `from`, nor abandoned before it, a day after it started; the newest `take` of
- * them, newest first.
+ * The tasks the viewer sees, shared agents' and their own agents', under way at some point since
+ * `from`: started before now and not finished before `from`, nor abandoned before it, a day after
+ * it started; the newest `take` of them, newest first.
  */
 export async function listAgentTasksSince(
-	orgId: string,
+	viewer: Viewer,
 	from: Date,
 	take: number,
 ): Promise<Result<AgentTaskRow[], ApiError>> {
 	return wrapDb(() =>
 		db.agentTask.findMany({
 			where: {
-				orgId,
+				AND: [visibleTo(viewer)],
 				OR: [
 					{finishedAt: {gte: from}},
 					{finishedAt: null, createdAt: {gte: new Date(from.getTime() - TASK_ABANDONED_AFTER_MS)}},
@@ -184,13 +187,18 @@ export async function listAgentTasksSince(
 	);
 }
 
-/** The organization's tasks among `ids`, for naming what the activity log's entries were for. */
+/** The tasks the viewer sees among `ids`, for naming what the activity log's entries were for. */
 export async function listAgentTasks(
-	orgId: string,
+	viewer: Viewer,
 	ids: string[],
 ): Promise<Result<AgentTaskRow[], ApiError>> {
 	if (ids.length === 0) {
 		return wrapDb(async () => []);
 	}
-	return wrapDb(() => db.agentTask.findMany({where: {orgId, id: {in: ids}}, select: taskSelect}));
+	return wrapDb(() =>
+		db.agentTask.findMany({
+			where: {...visibleTo(viewer), id: {in: ids}},
+			select: taskSelect,
+		}),
+	);
 }

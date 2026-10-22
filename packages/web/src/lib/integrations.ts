@@ -6,6 +6,7 @@ import {
 	type IntegrationId,
 	type McpTool,
 } from '@proxy/integrations';
+import {orgApi} from '@/client/request';
 
 // A brand's own logo, `public/integrations/<id>.svg`, unless `LOGOS` says otherwise. One found on
 // the internet has a file of ours to show where it can't be loaded.
@@ -109,11 +110,18 @@ export function integrationOf(connection: {
 // where it can, and with `?connection=` the sign-in renews that connection where its account can't
 // be told apart from another's: the integration says nothing of who signed in (`anonymous`), or
 // the connection was never signed in to. Otherwise the connection of the account signed in to is
-// renewed, or a new one made.
-/** Where signing in to an integration starts, or null for one connected on a form of its own. */
+// renewed, or a new one made. With `?share=everyone`, a new connection is for every member of the
+// organization rather than the person's own.
+/** Where signing in to an integration starts, in the organization `org`, or null for one connected on a form of its own. */
 export function signInPath(
+	org: string,
 	integrationId: string,
-	query: {returnTo?: 'welcome' | 'home'; account?: string; connection?: string} = {},
+	query: {
+		returnTo?: 'welcome' | 'home';
+		account?: string;
+		connection?: string;
+		share?: 'everyone';
+	} = {},
 ): string | null {
 	if (!findIntegration(integrationId)?.signIn) {
 		return null;
@@ -122,7 +130,7 @@ export function signInPath(
 		Object.entries(query).flatMap(([key, value]) => (value === undefined ? [] : [[key, value]])),
 	);
 	const search = params.size > 0 ? `?${params.toString()}` : '';
-	return `/api/connections/${integrationId}/start${search}`;
+	return `${orgApi(org)}/connections/${integrationId}/start${search}`;
 }
 
 /** What the server lacked when a sign-in came back with `?error=<integration>-unconfigured`. */
