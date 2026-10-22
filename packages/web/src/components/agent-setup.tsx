@@ -1,4 +1,9 @@
-import {findAgentProvider, type AgentProvider, type AgentProviderId} from '@proxy/integrations';
+import {
+	findAgentProvider,
+	loginProviderIdFor,
+	type AgentProvider,
+	type AgentProviderId,
+} from '@proxy/integrations';
 import {CheckIcon, LoaderCircleIcon} from 'lucide-react';
 import {useEffect, useState, type ReactNode} from 'react';
 import {useRevalidator, useSearchParams} from 'react-router';
@@ -73,7 +78,9 @@ export function AgentSetup({
 	const [error, setError] = useState<string | null>(null);
 	const chosen = chosenId ? findAgentProvider(chosenId) : undefined;
 	const existingFor = (provider: AgentProvider) =>
-		live.find((agent) => agent.providerId === provider.id && !known.has(agent.id)) ?? null;
+		live.find(
+			(agent) => agent.providerId === loginProviderIdFor(provider) && !known.has(agent.id),
+		) ?? null;
 	const existing = chosen ? existingFor(chosen) : null;
 	useCommandEnter(
 		() => {
@@ -186,7 +193,7 @@ export function AgentSetup({
 		return (
 			<McpAgent
 				provider={chosen}
-				name={chosen.custom && !fixed ? null : (existing?.name ?? chosen.name)}
+				name={chosen.custom ? (fixed ? (existing?.name ?? chosen.name) : null) : chosen.name}
 				existing={existing}
 				actions={actions}
 			/>
@@ -269,14 +276,23 @@ const MCP_STEPS: Partial<
 	>
 > = {
 	claude: {
-		where:
-			'In Claude, open Customize, then Connectors, and choose Add custom connector. Claude Duet uses the same connectors as Claude.',
+		where: 'In Claude, open Customize, then Connectors, and choose Add custom connector.',
 		url: 'https://claude.ai/customize/connectors',
 		openLabel: 'Claude',
 		afterAdd:
 			'Name the connector, paste the server address, and continue. Choose Sign in now, then choose Register automatically under OAuth client.',
 		authorize:
-			'Claude opens Personal Agent Proxy to sign in. Choose Claude when asked which agent it works as. That login gives Claude and Claude Duet the same access and activity history.',
+			'Claude opens Personal Agent Proxy to sign in. Choose Claude when asked which agent it works as.',
+	},
+	'claude-duet': {
+		where:
+			'Claude Duet uses the connectors in your Claude account. In Claude, open Customize, then Connectors, and choose Add custom connector.',
+		url: 'https://claude.ai/customize/connectors',
+		openLabel: 'Claude',
+		afterAdd:
+			'Name the connector, paste the server address, and continue. Choose Sign in now, then choose Register automatically under OAuth client.',
+		authorize:
+			'Claude opens Personal Agent Proxy to sign in. Choose Claude when asked which agent it works as. Claude Duet shares that login, its access, and its activity history.',
 	},
 	'claude-code': {
 		where: 'Run the command above in a terminal.',
@@ -347,7 +363,10 @@ function McpAgent({
 		<>
 			<StepHeading title={`Add Personal Agent Proxy to ${name ?? 'your agent'}`}>
 				{provider.custom && !name ? 'Any agent that speaks MCP' : subject} works through Personal
-				Agent Proxy as a connector, signed in with its own login.
+				Agent Proxy as a connector
+				{provider.loginProviderId
+					? `, sharing the ${findAgentProvider(provider.loginProviderId)?.name ?? 'account'} login.`
+					: ', signed in with its own login.'}
 			</StepHeading>
 			{!reachable && <NotPublicCallout />}
 			{!PUBLIC && provider.custom && <NotPublicCallout custom />}

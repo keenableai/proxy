@@ -1,18 +1,25 @@
-import {AGENT_PROVIDERS} from '@proxy/integrations';
+import {AGENT_PROVIDERS, loginProviderIdFor} from '@proxy/integrations';
 import {useLoaderData, useNavigate} from 'react-router';
 import {AgentSetup} from '@/components/agent-setup';
 import {AppShell, PageTitle} from '@/components/app-shell';
 import {BackButton} from '@/components/back-button';
 import type {agentsLoader} from '@/loaders';
 
-// A new agent, set up as in the welcome flow: chosen from the companies without a login yet, or a
-// custom MCP agent, then handed its login or added as a connector, and on to its page.
+// A new agent, set up as in the welcome flow: chosen from the products without a login yet, a
+// product that shares another's login, or a custom MCP agent, then handed its login or added as a
+// connector, and on to its page.
 export function NewAgentPage() {
 	const {agents} = useLoaderData<typeof agentsLoader>();
 	const navigate = useNavigate();
-	const providers = AGENT_PROVIDERS.filter(
-		(provider) => provider.custom || !agents.some((agent) => agent.providerId === provider.id),
-	);
+	const providers = AGENT_PROVIDERS.filter((provider) => {
+		if (provider.loginProviderId !== undefined) {
+			return !agents.some(
+				(agent) => agent.providerId === loginProviderIdFor(provider) && agent.revokedAt !== null,
+			);
+		}
+
+		return provider.custom || !agents.some((agent) => agent.providerId === provider.id);
+	});
 
 	return (
 		<AppShell

@@ -64,7 +64,9 @@ function Consent({
 			consent: {allow: true, agentId: agent.id} as const,
 		})),
 		...AGENT_PROVIDERS.filter(
-			(provider) => provider.custom || !agents.some((agent) => agent.providerId === provider.id),
+			(provider) =>
+				provider.loginProviderId === undefined &&
+				(provider.custom || !agents.some((agent) => agent.providerId === provider.id)),
 		).map((provider) => ({
 			key: `new-${provider.id}`,
 			providerId: provider.id,
