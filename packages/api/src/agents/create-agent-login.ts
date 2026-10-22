@@ -2,7 +2,7 @@ import {Err, Ok, type Result} from 'ts-results-es';
 
 import {ApiErr, type ApiError, Do, requirePresent} from '@proxy/utils';
 import {createAgent, isProviderConflict, isUsernameConflict, type AgentRow} from '@proxy/db/agent';
-import {CUSTOM_AGENT_NAME_MAX, findAgentProvider, type AgentProvider} from '@proxy/integrations';
+import {CUSTOM_AGENT_NAME_MAX, findAgentProvider, loginProviderIdFor, type AgentProvider} from '@proxy/integrations';
 
 import {generatePassword, generateUsername} from './credentials';
 
@@ -31,7 +31,8 @@ function nameFor(provider: AgentProvider, name: string | undefined): Result<stri
  */
 export function createAgentLogin(orgId: string, providerId: string, givenName?: string): Promise<Result<{agent: AgentRow; password: string}, ApiError>> {
 	return Do(async ($) => {
-		const provider = $(requirePresent(findAgentProvider(providerId), ApiErr.parseError(`Unknown agent ${providerId}`)));
+		const product = $(requirePresent(findAgentProvider(providerId), ApiErr.parseError(`Unknown agent ${providerId}`)));
+		const provider = $(requirePresent(findAgentProvider(loginProviderIdFor(product)), ApiErr.parseError(`Unknown login provider for ${providerId}`)));
 		const name = $(nameFor(provider, givenName));
 		const password = generatePassword();
 		const passwordHash = await Bun.password.hash(password);

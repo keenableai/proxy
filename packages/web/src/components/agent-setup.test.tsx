@@ -123,19 +123,47 @@ describe('AgentSetup', () => {
 		expect(screen.getByText(/Claude Code opens Personal Agent Proxy to sign in/)).toBeDefined();
 	});
 
-	test('adds Claude and Claude Duet through their shared Claude account connector', () => {
+	test('offers Claude and Claude Duet as separate products', () => {
+		renderAgentChoice();
+
+		expect(screen.getByRole('button', {name: 'Claude Needs a public https address'})).toBeDefined();
+		expect(
+			screen.getByRole('button', {name: 'Claude Duet Needs a public https address'}),
+		).toBeDefined();
+	});
+
+	test('adds Claude through its Claude account connector', () => {
 		renderAgentSetup('claude');
 
-		expect(screen.getByText(/Claude Duet uses the same connectors as Claude/)).toBeDefined();
 		expect(screen.getByRole('link', {name: 'Open Claude'}).getAttribute('href')).toBe(
 			'https://claude.ai/customize/connectors',
 		);
 		expect(screen.getByText(/choose Register automatically under OAuth client/)).toBeDefined();
+		expect(screen.getByText(/Choose Claude when asked which agent it works as/)).toBeDefined();
+	});
+
+	test('adds Claude Duet as its own product through the shared Claude login', () => {
+		const claude: AgentLogin = {
+			id: 'agent-1',
+			providerId: 'claude',
+			name: 'Claude',
+			username: 'claude-k7q2',
+			createdAt: '2026-10-01T00:00:00Z',
+			lastActiveAt: null,
+			revokedAt: null,
+			grants: [],
+		};
+		const continued: Array<AgentLogin | null> = [];
+		renderAgentSetup('claude-duet', [claude], (agent) => continued.push(agent));
+
+		expect(screen.getByText('Add Personal Agent Proxy to Claude Duet')).toBeDefined();
 		expect(
-			screen.getByText(
-				/That login gives Claude and Claude Duet the same access and activity history/,
-			),
+			screen.getByText(/Claude Duet uses the connectors in your Claude account/),
 		).toBeDefined();
+		expect(screen.getByText(/Claude Duet shares that login/)).toBeDefined();
+
+		fireEvent.keyDown(window, {key: 'Enter', metaKey: true});
+		expect(continued).toEqual([claude]);
 	});
 
 	test('adds a custom MCP agent, however many there are already', () => {

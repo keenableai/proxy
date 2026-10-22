@@ -5,6 +5,7 @@ export type AgentProviderId =
 	| 'dot'
 	| 'poke'
 	| 'claude'
+	| 'claude-duet'
 	| 'claude-code'
 	| 'claude-desktop'
 	| 'hermes'
@@ -15,6 +16,8 @@ export type AgentProvider = {
 	id: AgentProviderId;
 	name: string;
 	aliases?: string[];
+	/** A distinct product that uses another provider's account-wide agent login. */
+	loginProviderId?: AgentProviderId;
 	company: string;
 	/**
 	 * How the agent gets its access: `mcp` adds Personal Agent Proxy as a connector and signs in
@@ -40,7 +43,9 @@ export type AgentProvider = {
 	faviconUrl?: string;
 };
 
-// The agents an organization can make a login for: one each, and any number of custom ones.
+// The agent products a person can connect. Most have one login each; a product with a
+// loginProviderId shares that provider's account-wide login. An organization can add any number
+// of custom agents.
 export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: 'grok-bot',
@@ -87,11 +92,19 @@ export const AGENT_PROVIDERS: AgentProvider[] = [
 	{
 		id: 'claude',
 		name: 'Claude',
-		aliases: ['Claude Duet'],
 		company: 'Anthropic',
 		connects: 'mcp',
 		local: false,
 		faviconUrl: '/agent-providers/claude.png',
+	},
+	{
+		id: 'claude-duet',
+		name: 'Claude Duet',
+		loginProviderId: 'claude',
+		company: 'Anthropic',
+		connects: 'mcp',
+		local: false,
+		faviconUrl: '/agent-providers/claude-duet.png',
 	},
 	{
 		id: 'claude-code',
@@ -140,6 +153,11 @@ export function findAgentProvider(id: string): AgentProvider | undefined {
 	return AGENT_PROVIDERS.find((provider) => provider.id === id);
 }
 
+/** The provider id stored for a product's login. Some products share one account-wide login. */
+export function loginProviderIdFor(provider: AgentProvider): AgentProviderId {
+	return provider.loginProviderId ?? provider.id;
+}
+
 /** The longest name a custom agent can be given. */
 export const CUSTOM_AGENT_NAME_MAX = 60;
 
@@ -163,5 +181,9 @@ export function suggestAgentProvider(clientName: string): AgentProvider | undefi
 			best = {provider, length: candidate.length};
 		}
 	}
-	return best?.provider;
+	if (!best) {
+		return undefined;
+	}
+
+	return findAgentProvider(loginProviderIdFor(best.provider));
 }
