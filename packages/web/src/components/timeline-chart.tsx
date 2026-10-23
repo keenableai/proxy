@@ -1,4 +1,3 @@
-import {BanIcon, XIcon} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {connectionLabel, describeEntry, locateEntry} from '@/lib/access';
 import {formatTime} from '@/lib/format';
@@ -24,11 +23,13 @@ import {cn} from '@proxy/ui/lib/utils';
 // TASK_COLOR_CLASS) is set as the text color, which the shapes take as currentColor: a task is a
 // faint track of it, with the requests made for the task solid on it; the hatching, the lines between
 // rows and the axis are in the foreground's grays; amber and red are kept for a request blocked
-// or failed, what may need the person.
+// or failed, what may need the person, drawn on the track as the others are.
 
 // A request blocked, amber, or failed, red: what may need the person.
-const BLOCKED = 'bg-amber-500 dark:bg-amber-600';
-const FAILED = 'bg-red-500 dark:bg-red-700';
+const OUTCOME_FILL: Record<'denied' | 'failed', string> = {
+	denied: 'fill-amber-500',
+	failed: 'fill-red-500',
+};
 
 /** The hatching a task wears while it waits on what it handed on: thin lines at 45°. */
 export function HatchDefs({id}: {id: string}) {
@@ -85,7 +86,10 @@ export function Track({
 	);
 }
 
-/** The requests made for a task, solid on its track, those that touch drawn as one. */
+/**
+ * The requests made for a task, solid on its track, those that touch drawn as one: in the task's
+ * color, or over it in amber where blocked and red where failed.
+ */
 export function RequestMarks({
 	requests,
 	y,
@@ -95,19 +99,27 @@ export function RequestMarks({
 	y: number;
 	height: number;
 }) {
+	const marks = (outcome: AuditEntry['outcome']) =>
+		merged(
+			requests.filter((request) => request.entry.outcome === outcome),
+			1,
+		).map((span) => (
+			<rect
+				key={`${outcome}-${span.start}`}
+				x={span.start}
+				y={y}
+				width={span.end - span.start}
+				height={height}
+				rx={Math.min(2, height / 2)}
+				fill={outcome === 'allowed' ? 'currentColor' : undefined}
+				className={outcome === 'allowed' ? undefined : OUTCOME_FILL[outcome]}
+			/>
+		));
 	return (
 		<>
-			{merged(requests, 1).map((span) => (
-				<rect
-					key={span.start}
-					x={span.start}
-					y={y}
-					width={span.end - span.start}
-					height={height}
-					rx={Math.min(2, height / 2)}
-					fill="currentColor"
-				/>
-			))}
+			{marks('allowed')}
+			{marks('denied')}
+			{marks('failed')}
 		</>
 	);
 }
@@ -169,9 +181,8 @@ export function TaskTooltip({
 	);
 }
 
-// A hit target over a request, in the layer over the chart: on hover, what it was, where and how
-// long it took; a click opens it in full. One blocked or failed wears a marker; every other is
-// only its stretch of the track.
+// A hit target over a request's stretch of the track, in the layer over the chart: on hover, what
+// it was, where and how long it took, and why it didn't go through; a click opens it in full.
 function RequestTarget({
 	request,
 	top,
@@ -192,7 +203,13 @@ function RequestTarget({
 	const located = locateEntry(connections, entry);
 	const where = located ? connectionLabel(connections, located.connection) : 'Deleted connection';
 	const duration = entry.durationMs === null ? null : formatDuration(entry.durationMs);
-	const marked = entry.outcome !== 'allowed';
+	// One that didn't go through is always pointed at, so its target is never narrower than the
+	// least, centred on its stretch.
+	const width = Math.max(
+		request.end - request.start,
+		entry.outcome === 'allowed' ? 0 : MIN_TARGET_PX,
+	);
+	const left = (request.start + request.end - width) / 2;
 	return (
 		<Tooltip disableHoverablePopup>
 			<TooltipTrigger
@@ -201,20 +218,11 @@ function RequestTarget({
 						type="button"
 						onClick={onOpen}
 						aria-label={describeEntry(entry, located)}
-						className={cn(
-							'absolute cursor-pointer rounded-sm transition-[top] duration-300 ease-in-out focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none',
-							!marked && 'hover:bg-foreground/10',
-						)}
-						style={
-							marked
-								? {left: request.end, top: top + height / 2, width: 0, height: 0}
-								: {left: request.start, top, width: request.end - request.start, height}
-						}
+						className="absolute cursor-pointer rounded-sm transition-[top] duration-300 ease-in-out hover:bg-foreground/10 focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none"
+						style={{left, top, width, height}}
 					/>
 				}
-			>
-				{marked && <Marker blocked={entry.outcome === 'denied'} className="-translate-1/2" />}
-			</TooltipTrigger>
+			/>
 			<TooltipContent className="pointer-events-none max-w-xs">
 				<span className="flex flex-col gap-1">
 					<span className="font-medium">{describeEntry(entry, located)}</span>
@@ -234,13 +242,9 @@ function RequestTarget({
 // The least a request is wide to get a target of its own, where it isn't marked.
 export const MIN_TARGET_PX = 8;
 
-// Markers closer than this would overlap, so their requests share one, with their count on it.
-const CLUSTER_PX = 14;
-
 /**
- * The targets for a row's requests: those blocked or failed as markers, any that would overlap as
- * one marker with their count; every other as its stretch of the track, where it is wide enough
- * to point at.
+ * The targets for a row's requests: every one that didn't go through, and every other where its
+ * stretch of the track is wide enough to point at.
  */
 export function RequestTargets({
 	requests,
@@ -258,22 +262,12 @@ export function RequestTargets({
 	forTask: (entry: AuditEntry) => string | null;
 	onOpen: (entry: AuditEntry) => void;
 }) {
-	const clusters: TimelineRequest[][] = [];
-	for (const request of requests.filter((candidate) => candidate.entry.outcome !== 'allowed')) {
-		const last = clusters[clusters.length - 1];
-		const anchor = last?.[0]?.end;
-		if (last && anchor !== undefined && request.end - anchor < CLUSTER_PX) {
-			last.push(request);
-			continue;
-		}
-		clusters.push([request]);
-	}
 	return (
 		<>
 			{requests
 				.filter(
 					(request) =>
-						request.entry.outcome === 'allowed' && request.end - request.start >= MIN_TARGET_PX,
+						request.entry.outcome !== 'allowed' || request.end - request.start >= MIN_TARGET_PX,
 				)
 				.map((request) => (
 					<RequestTarget
@@ -286,116 +280,7 @@ export function RequestTargets({
 						onOpen={() => onOpen(request.entry)}
 					/>
 				))}
-			{clusters.map((cluster) => {
-				const [first] = cluster;
-				if (!first) {
-					return null;
-				}
-				if (cluster.length === 1) {
-					return (
-						<RequestTarget
-							key={first.entry.id}
-							request={first}
-							top={top}
-							height={height}
-							connections={connections}
-							forTask={forTask(first.entry)}
-							onOpen={() => onOpen(first.entry)}
-						/>
-					);
-				}
-				return (
-					<RequestCluster
-						key={first.entry.id}
-						requests={cluster}
-						top={top + height / 2}
-						connections={connections}
-						onOpen={onOpen}
-					/>
-				);
-			})}
 		</>
-	);
-}
-
-// Requests blocked or failed so close together their markers would overlap: one marker with
-// their count, amber where every one was blocked and red where any failed; on hover, what each
-// was; a click opens the latest.
-function RequestCluster({
-	requests,
-	top,
-	connections,
-	onOpen,
-}: {
-	requests: TimelineRequest[];
-	top: number;
-	connections: Connection[];
-	onOpen: (entry: AuditEntry) => void;
-}) {
-	const blocked = requests.filter((request) => request.entry.outcome === 'denied').length;
-	const failed = requests.length - blocked;
-	const latest = requests[requests.length - 1];
-	const summary = [
-		...(blocked > 0 ? [`${blocked} blocked`] : []),
-		...(failed > 0 ? [`${failed} failed`] : []),
-	].join(', ');
-	return (
-		<Tooltip disableHoverablePopup>
-			<TooltipTrigger
-				render={
-					<button
-						type="button"
-						onClick={() => latest && onOpen(latest.entry)}
-						aria-label={`${requests.length} requests: ${summary}`}
-						className="absolute cursor-pointer transition-[top] duration-300 ease-in-out focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none"
-						style={{left: requests[0]?.end ?? 0, top, width: 0, height: 0}}
-					/>
-				}
-			>
-				<Marker blocked={failed === 0} count={requests.length} className="-translate-1/2" />
-			</TooltipTrigger>
-			<TooltipContent className="pointer-events-none max-w-xs">
-				<span className="flex flex-col gap-1">
-					<span className="font-medium">
-						{requests.length} requests {summary}
-					</span>
-					{requests.slice(0, 5).map((request) => (
-						<span key={request.entry.id} className="opacity-80">
-							{describeEntry(request.entry, locateEntry(connections, request.entry))} ·{' '}
-							{formatTime(request.entry.at)}
-						</span>
-					))}
-					{requests.length > 5 && <span className="opacity-80">{requests.length - 5} more</span>}
-				</span>
-			</TooltipContent>
-		</Tooltip>
-	);
-}
-
-function Marker({
-	blocked,
-	count,
-	className,
-}: {
-	blocked: boolean;
-	count?: number;
-	className?: string;
-}) {
-	const Icon = blocked ? BanIcon : XIcon;
-	return (
-		<span
-			aria-hidden
-			className={cn(
-				'absolute flex size-4 items-center justify-center rounded-full text-white ring-2 ring-background',
-				blocked ? BLOCKED : FAILED,
-				className,
-			)}
-		>
-			{count === undefined && <Icon className="size-2.5" strokeWidth={3} />}
-			{count !== undefined && (
-				<span className="text-[10px] leading-none font-semibold tabular-nums">{count}</span>
-			)}
-		</span>
 	);
 }
 
@@ -435,7 +320,8 @@ type LegendRow = {status: TaskStatus; requests: TimelineRequest[]; waiting?: Spa
 
 /**
  * The key to the marks on a chart, only for those on it: a task's track with its requests always,
- * and the hatching, the pulse, the dashed track and the markers while any row has them. The rest
+ * and the hatching, the pulse, the dashed track and the amber and red requests while any row has
+ * them. The rest
  * the chart tells itself, on hover or on the axis.
  */
 export function ChartLegend({rows}: {rows: LegendRow[]}) {
@@ -451,8 +337,8 @@ export function ChartLegend({rows}: {rows: LegendRow[]}) {
 			{waiting && <Key swatch={<TrackSwatch hatched />}>Waiting on sub-tasks</Key>}
 			{running && <Key swatch={<TrackSwatch running />}>Under way</Key>}
 			{abandoned && <Key swatch={<TrackSwatch abandoned />}>Given up</Key>}
-			{blocked && <Key swatch={<Marker blocked className="relative" />}>Blocked</Key>}
-			{failed && <Key swatch={<Marker blocked={false} className="relative" />}>Failed</Key>}
+			{blocked && <Key swatch={<TrackSwatch outcome="denied" />}>Blocked</Key>}
+			{failed && <Key swatch={<TrackSwatch outcome="failed" />}>Failed</Key>}
 		</div>
 	);
 }
@@ -466,17 +352,22 @@ function Key({swatch, children}: {swatch: ReactNode; children: ReactNode}) {
 	);
 }
 
-/** A swatch of a task's track, for the legend: with requests on it, hatched, under way or given up. */
+/**
+ * A swatch of a task's track, for the legend: with requests on it, hatched, under way, given up, or
+ * with a request blocked or failed.
+ */
 function TrackSwatch({
 	requests = false,
 	hatched = false,
 	running = false,
 	abandoned = false,
+	outcome,
 }: {
 	requests?: boolean;
 	hatched?: boolean;
 	running?: boolean;
 	abandoned?: boolean;
+	outcome?: 'denied' | 'failed';
 }) {
 	return (
 		<svg width="24" height="12" className={cn('block', TASK_COLOR_CLASS)} aria-hidden>
@@ -492,6 +383,9 @@ function TrackSwatch({
 			{requests && <rect x="14" y="1" width="4" height="10" rx="2" fill="currentColor" />}
 			{hatched && <rect y="1" width="24" height="10" rx="3" fill="url(#legend-hatch)" />}
 			{running && <Pulse x={20} y={6} />}
+			{outcome && (
+				<rect x="9" y="1" width="5" height="10" rx="2" className={OUTCOME_FILL[outcome]} />
+			)}
 		</svg>
 	);
 }

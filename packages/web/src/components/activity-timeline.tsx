@@ -81,10 +81,10 @@ type Props = {
 
 // Who is doing what (the layout in lib/activity-timeline.ts): every agent's row over a window of
 // time, a bar for every task it was given, named where there is room, the requests made for it
-// along the bar's bottom as long as each took, blocked or failed ones marked. Tasks under way at
-// once each take a lane of the row; short ones close together are one bar, which zooms in on them.
-// A bar says more on hover and opens the task's page; a request opens in full; an agent's name
-// opens the agent's page. As the window moves, a row or lane that comes into need grows in at
+// along the bar's bottom as long as each took, blocked ones amber and failed ones red. Tasks under
+// way at once each take a lane of the row; short ones close together are one bar, which zooms in on
+// them. A bar says more on hover and opens the task's page; a request opens in full; an agent's
+// name opens the agent's page. As the window moves, a row or lane that comes into need grows in at
 // once, while bars keep their lanes and rows their order, and zooming in on a bar, rows make room
 // for the whole way at once; a second after the window comes to rest, bars settle into the lowest
 // lanes, and rows and lanes no longer needed shrink away.
