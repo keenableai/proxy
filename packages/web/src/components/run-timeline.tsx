@@ -1,6 +1,6 @@
 import {ChevronDownIcon, ChevronRightIcon, CornerDownRightIcon} from 'lucide-react';
 import {Fragment, useId, useState} from 'react';
-import {Link} from 'react-router';
+import {Link, useLocation} from 'react-router';
 import {
 	AxisLabels,
 	HatchDefs,
@@ -312,6 +312,7 @@ function RowLabel({
 	onHover: (over: boolean) => void;
 }) {
 	const org = useOrgSlug();
+	const {state} = useLocation();
 	const [task] = row.tasks;
 	const foldable = row.kind === 'group' || row.rolledIn > 0 || open;
 	const chevronLabel =
@@ -367,6 +368,7 @@ function RowLabel({
 			{row.kind === 'task' && task && (
 				<Link
 					to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
+					state={state}
 					preventScrollReset
 					aria-current={focused ? 'page' : undefined}
 					className="flex h-full min-w-0 flex-1 items-center pr-3 pl-1 hover:text-foreground"
@@ -393,6 +395,7 @@ function RowTarget({
 	onHover: (over: boolean) => void;
 }) {
 	const org = useOrgSlug();
+	const {state} = useLocation();
 	const [task] = row.tasks;
 	const style = {
 		left: row.start,
@@ -440,6 +443,7 @@ function RowTarget({
 				render={
 					<Link
 						to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
+						state={state}
 						preventScrollReset
 						aria-label={task.title}
 						className={className}

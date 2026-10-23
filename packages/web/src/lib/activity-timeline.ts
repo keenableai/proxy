@@ -7,7 +7,9 @@ import type {ActivityTask, AuditEntry} from '@/lib/types';
 // requests made for the task along the bottom of the bar as long as each took. A task's sub-tasks
 // are rolled into it here, their requests on its bar; the task's page lays them out. Tasks under
 // way at once each take a lane of the agent's row; one after another, they share one. Over a long
-// window, short tasks close together are one bar, which zooms the window in on them.
+// window, short tasks close together are one bar, which zooms the window in on them. A bar keeps
+// the lane it had the last time, where that is free, so bars don't hop lanes as others come and
+// go; a lane left empty that way stays until the window comes to rest.
 
 export type ActivityBar = Span & {
 	// The task, or, for short ones close together, the tasks, in the order started.
@@ -31,10 +33,14 @@ export type ActivityBar = Span & {
 
 export type ActivityRow = {
 	agentId: string;
-	// Bars in lanes: those in one lane don't overlap.
+	// Bars in lanes: those in one lane don't overlap. A lane may be empty, where the bars that kept
+	// it have left.
 	lanes: ActivityBar[][];
 	working: number;
 };
+
+// The lane each bar, by its key, had the last time: what it is given again where that is free.
+export type LanePreferences = ReadonlyMap<string, number>;
 
 type ActivityTick = {px: number; label: string};
 
@@ -57,7 +63,8 @@ const LABEL_PX = 72;
 
 /**
  * The timeline of `tasks` over `window`, `width` pixels wide, as it stood at `now`: every agent's
- * row, the busiest first, over the tasks it was given that were under way in the window.
+ * row, the busiest first, over the tasks it was given that were under way in the window, each bar
+ * in the lane `preferred` gives it where that is free, else the first that is.
  */
 export function buildActivityTimeline(
 	allTasks: ActivityTask[],
@@ -65,6 +72,7 @@ export function buildActivityTimeline(
 	now: Date,
 	window: Window,
 	width: number,
+	preferred: LanePreferences = new Map(),
 ): ActivityTimeline {
 	const time = (iso: string) => new Date(iso).getTime();
 	const endOf = (task: ActivityTask) => (endedAt(task, now) ?? now).getTime();
@@ -116,16 +124,34 @@ export function buildActivityTimeline(
 			width,
 		);
 		const lanes: ActivityBar[][] = [];
+		const free = (lane: ActivityBar[] | undefined, bar: ActivityBar) =>
+			lane === undefined ||
+			lane.every(
+				(other) => other.end + LANE_GAP_PX <= bar.start || bar.end + LANE_GAP_PX <= other.start,
+			);
+		// Bars with a lane to keep take it first, so a bar new to the window can't take it from them;
+		// then every other bar takes the first lane that is free.
+		const place = (bar: ActivityBar, index: number) => {
+			while (lanes.length <= index) {
+				lanes.push([]);
+			}
+			lanes[index]?.push(bar);
+		};
+		const rest: ActivityBar[] = [];
 		for (const bar of own) {
-			const lane = lanes.find((candidate) => {
-				const last = candidate[candidate.length - 1];
-				return last === undefined || last.end + LANE_GAP_PX <= bar.start;
-			});
-			if (lane) {
-				lane.push(bar);
+			const wanted = laneWanted(bar, preferred);
+			if (wanted !== undefined && free(lanes[wanted], bar)) {
+				place(bar, wanted);
 				continue;
 			}
-			lanes.push([bar]);
+			rest.push(bar);
+		}
+		for (const bar of rest) {
+			const first = lanes.findIndex((lane) => free(lane, bar));
+			place(bar, first === -1 ? lanes.length : first);
+		}
+		for (const lane of lanes) {
+			lane.sort((a, b) => a.start - b.start);
 		}
 		return {agentId, lanes, working: own.filter((bar) => bar.status === 'running').length};
 	});
@@ -142,6 +168,33 @@ export function buildActivityTimeline(
 		Math.max(Math.floor(width / LABEL_PX), 2),
 	).map(({at, ago}) => ({px: at * width, label: ago === 0 ? 'Now' : formatDuration(ago * MINUTE)}));
 	return {rows, width, ticks};
+}
+
+/** A bar's key: its task's id, or, for several tasks, `cluster:` and the first's. */
+export function keyOf(bar: ActivityBar): string {
+	const id = bar.tasks[0]?.id ?? '';
+	return bar.tasks.length > 1 ? `cluster:${id}` : id;
+}
+
+// The lane a bar had: its own, or, for a bar of several tasks newly together, its first task's,
+// and for a task newly on its own, the lane of the bar it was first in.
+function laneWanted(bar: ActivityBar, preferred: LanePreferences): number | undefined {
+	const id = bar.tasks[0]?.id ?? '';
+	return preferred.get(keyOf(bar)) ?? preferred.get(bar.tasks.length > 1 ? id : `cluster:${id}`);
+}
+
+/** The lane every bar of the timeline is in, by its key: what each is given again next time. */
+export function laneAssignments(timeline: ActivityTimeline, compact = false): Map<string, number> {
+	const assignments = new Map<string, number>();
+	for (const row of timeline.rows) {
+		const lanes = compact ? row.lanes.filter((lane) => lane.length > 0) : row.lanes;
+		lanes.forEach((lane, index) => {
+			for (const bar of lane) {
+				assignments.set(keyOf(bar), index);
+			}
+		});
+	}
+	return assignments;
 }
 
 // One agent's bars, in the order started, with runs of short ones less than the gap apart made

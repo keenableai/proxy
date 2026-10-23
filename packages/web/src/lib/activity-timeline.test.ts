@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
-import {buildActivityTimeline} from './activity-timeline';
+import {buildActivityTimeline, laneAssignments} from './activity-timeline';
 
 const now = new Date('2026-10-16T12:00:00Z');
 const WIDTH = 600;
@@ -145,6 +145,69 @@ describe('buildActivityTimeline', () => {
 		expect(cluster?.toMs).toBe(Date.parse('2026-10-16T10:05:00Z'));
 		expect(cluster?.requests).toHaveLength(3);
 		expect(cluster?.status).toBe('finished');
+	});
+
+	test('a bar keeps the lane it had where that is free, leaving a lane empty rather than hopping', () => {
+		// Alone, the inbox takes the first lane; told it had the second, it keeps that.
+		const first = buildActivityTimeline([inbox], [], now, window, WIDTH);
+		expect(laneAssignments(first)).toEqual(new Map([['t1', 0]]));
+		const kept = buildActivityTimeline([inbox], [], now, window, WIDTH, new Map([['t1', 1]]));
+		expect(kept.rows[0]?.lanes.map((lane) => lane.map((bar) => bar.tasks[0]?.id))).toEqual([
+			[],
+			['t1'],
+		]);
+		// Another task that overlaps goes to the first lane that is free, the empty one.
+		const overlapping = task({id: 't4', startedAt: '2026-10-16T11:30:00Z'});
+		const both = buildActivityTimeline(
+			[inbox, overlapping],
+			[],
+			now,
+			window,
+			WIDTH,
+			new Map([['t1', 1]]),
+		);
+		expect(laneAssignments(both)).toEqual(
+			new Map([
+				['t1', 1],
+				['t4', 0],
+			]),
+		);
+		// A task new to the window, though it started earlier, doesn't take a kept lane.
+		const earlier = task({id: 't5', startedAt: '2026-10-16T10:30:00Z'});
+		const newcomer = buildActivityTimeline(
+			[inbox, earlier],
+			[],
+			now,
+			window,
+			WIDTH,
+			new Map([['t1', 0]]),
+		);
+		expect(laneAssignments(newcomer)).toEqual(
+			new Map([
+				['t1', 0],
+				['t5', 1],
+			]),
+		);
+		// Compacted, the empty lanes go.
+		expect(laneAssignments(kept, true)).toEqual(new Map([['t1', 0]]));
+		// A lane that is taken is not kept: the bar goes to the first free one instead.
+		const clash = buildActivityTimeline(
+			[inbox, overlapping],
+			[],
+			now,
+			window,
+			WIDTH,
+			new Map([
+				['t1', 0],
+				['t4', 0],
+			]),
+		);
+		expect(laneAssignments(clash)).toEqual(
+			new Map([
+				['t1', 0],
+				['t4', 1],
+			]),
+		);
 	});
 
 	test('marks the axis in time before now, ending at it', () => {

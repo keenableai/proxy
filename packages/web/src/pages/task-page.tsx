@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {useLoaderData, useRevalidator} from 'react-router';
+import {useLoaderData, useLocation, useRevalidator} from 'react-router';
 import {AppShell, PageTitle} from '@/components/app-shell';
 import {AuditEntryDialog} from '@/components/audit-entry-dialog';
 import {AuditList} from '@/components/audit-list';
@@ -28,7 +28,11 @@ export function TaskPage() {
 	const org = useOrgSlug();
 	const {run, agents, connections} = useLoaderData<typeof taskLoader>();
 	const revalidator = useRevalidator();
+	const location = useLocation();
 	const [opened, setOpened] = useState<AuditEntry | null>(null);
+	// Where the page was come to from, where that page said: the home page with its window as it
+	// was; else the activity log, at the task.
+	const cameFrom = backOf(location.state);
 	const task = run?.tasks.find((candidate) => candidate.id === run.task);
 	const running =
 		run?.tasks.some((candidate) => taskStatus(candidate, new Date(run.now)) === 'running') ?? false;
@@ -70,8 +74,8 @@ export function TaskPage() {
 			title={
 				<>
 					<BackButton
-						to={`/${org}/activity?task=${encodeURIComponent(task.id)}`}
-						label="Back to activity"
+						to={cameFrom ?? `/${org}/activity?task=${encodeURIComponent(task.id)}`}
+						label={cameFrom ? 'Back' : 'Back to activity'}
 					/>
 					<PageTitle>{task.title}</PageTitle>
 				</>
@@ -154,4 +158,12 @@ function countOutcomes(entries: AuditEntry[]): string[] {
 		...(blocked > 0 ? [`${blocked} blocked`] : []),
 		...(failed > 0 ? [`${failed} failed`] : []),
 	];
+}
+
+// The address a page's state says to go back to, where it says one.
+function backOf(state: unknown): string | null {
+	if (typeof state !== 'object' || state === null || !('back' in state)) {
+		return null;
+	}
+	return typeof state.back === 'string' ? state.back : null;
 }

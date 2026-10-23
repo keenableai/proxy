@@ -88,5 +88,8 @@ describe('the window', () => {
 		expect(windowLabel(135)).toBe('Last 2h 15m');
 		expect(windowLabel(45)).toBe('Last 45m');
 		expect(windowLabel(3 * 24 * 60)).toBe('Last 3d');
+		// Scrolled back from now, it isn't the last anything.
+		expect(windowLabel(360, false)).toBe('6 hours');
+		expect(windowLabel(135, false)).toBe('2h 15m');
 	});
 });

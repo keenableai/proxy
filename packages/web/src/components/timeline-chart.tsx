@@ -202,7 +202,7 @@ function RequestTarget({
 						onClick={onOpen}
 						aria-label={describeEntry(entry, located)}
 						className={cn(
-							'absolute cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring',
+							'absolute cursor-pointer rounded-sm transition-[top] duration-300 ease-in-out focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none',
 							!marked && 'hover:bg-foreground/10',
 						)}
 						style={
@@ -347,7 +347,7 @@ function RequestCluster({
 						type="button"
 						onClick={() => latest && onOpen(latest.entry)}
 						aria-label={`${requests.length} requests: ${summary}`}
-						className="absolute cursor-pointer focus-visible:outline-2 focus-visible:outline-ring"
+						className="absolute cursor-pointer transition-[top] duration-300 ease-in-out focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none"
 						style={{left: requests[0]?.end ?? 0, top, width: 0, height: 0}}
 					/>
 				}

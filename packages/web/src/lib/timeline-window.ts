@@ -13,7 +13,7 @@ export const WINDOWS = [
 
 export type WindowId = (typeof WINDOWS)[number]['id'];
 
-export const DEFAULT_MINUTES = 6 * 60;
+export const DEFAULT_MINUTES = 24 * 60;
 
 // The least that is read, whatever the window, so zooming in has what it needs and the timeline
 // knows whether there is anything to show at all.
@@ -48,13 +48,16 @@ export function zoomed(minutes: number, deltaY: number): number {
 	return Math.round(Math.min(Math.max(next, MIN_MINUTES), MAX_MINUTES));
 }
 
-/** "Last 6 hours" for a window on offer; "Last 2h 15m" for one zoomed to. */
-export function windowLabel(minutes: number): string {
+/**
+ * "Last 6 hours" for a window on offer, "Last 2h 15m" for one zoomed to; scrolled back from now,
+ * when it isn't the last anything, just "6 hours" or "2h 15m".
+ */
+export function windowLabel(minutes: number, endsNow = true): string {
 	const preset = presetOf(minutes);
-	if (preset) {
-		return WINDOWS.find((window) => window.id === preset)?.label ?? '';
-	}
-	return `Last ${describeMinutes(minutes)}`;
+	const label = preset
+		? (WINDOWS.find((window) => window.id === preset)?.label ?? '')
+		: `Last ${describeMinutes(minutes)}`;
+	return endsNow ? label : label.replace(/^Last /, '');
 }
 
 // "45m", "2h 15m", "3d 4h".

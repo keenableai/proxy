@@ -1,9 +1,8 @@
-import {Fragment, useId} from 'react';
+import {Fragment, useEffect, useRef, useState} from 'react';
 import {Link} from 'react-router';
 import {AgentLogo} from '@/components/brand-logo';
 import {
 	AxisLabels,
-	HatchDefs,
 	Key,
 	Legend,
 	Marker,
@@ -20,7 +19,11 @@ import {useOrgSlug} from '@/hooks/use-org';
 import {
 	type ActivityBar,
 	type ActivityRow,
+	type ActivityTimeline as ActivityLayout,
 	buildActivityTimeline,
+	keyOf,
+	laneAssignments,
+	type LanePreferences,
 	type Window,
 } from '@/lib/activity-timeline';
 import {
@@ -47,7 +50,19 @@ const REQUEST_INSET = 2;
 // A bar at least this wide carries its task's name.
 const MIN_NAMED_PX = 56;
 
+// How long a row takes to grow, shrink or fade; and how long after the window last moved a row,
+// or a lane of one, that is no longer needed is taken away: while the window is still moving,
+// rows only grow, so nothing jumps under the pointer.
+const MOTION_MS = 300;
+const SETTLE_MS = 1000;
+
 const LABEL = 'w-44 shrink-0 md:w-56';
+
+// What slides to its new lane: a change of top, or of the transform that places a bar's shapes.
+const MOVES = 'transition-[top,transform] duration-300 ease-in-out motion-reduce:transition-none';
+
+const laneHeight = (lanes: number) => lanes * LANE_H + 2 * ROW_PAD;
+const barTop = (lane: number) => ROW_PAD + lane * LANE_H + (LANE_H - BAR_H) / 2;
 
 type Props = {
 	tasks: ActivityTask[];
@@ -60,6 +75,8 @@ type Props = {
 	onOpenEntry: (entry: AuditEntry) => void;
 	// Zoom the window in on a stretch of time, in milliseconds since the epoch.
 	onZoom: (from: number, to: number) => void;
+	// Where a task's page comes back to: this page, with the window as it is.
+	backTo: string;
 };
 
 // Who is doing what (the layout in lib/activity-timeline.ts): every agent's row over a window of
@@ -67,7 +84,9 @@ type Props = {
 // along the bar's bottom as long as each took, blocked or failed ones marked. Tasks under way at
 // once each take a lane of the row; short ones close together are one bar, which zooms in on them.
 // A bar says more on hover and opens the task's page; a request opens in full; an agent's name
-// opens the agent's page.
+// opens the agent's page. As the window moves, a row or lane that comes into need grows in at
+// once, while bars keep their lanes and rows their order; a second after the window comes to
+// rest, bars settle into the lowest lanes, and rows and lanes no longer needed shrink away.
 export function ActivityTimeline({
 	tasks,
 	entries,
@@ -77,69 +96,74 @@ export function ActivityTimeline({
 	connections,
 	onOpenEntry,
 	onZoom,
+	backTo,
 }: Props) {
 	const [measure, width] = useChartWidth();
-	const hatch = useId();
-	const timeline = buildActivityTimeline(tasks, entries, new Date(now), window, width);
+	const [preferred, setPreferred] = useState<LanePreferences>(() => new Map());
+	const timeline = buildActivityTimeline(tasks, entries, new Date(now), window, width, preferred);
+	const rows = useSettledRows(timeline, window, preferred, setPreferred);
 	const titleOf = (taskId: string | null) =>
 		tasks.find((candidate) => candidate.id === taskId)?.title ?? null;
-	const heightOf = (row: ActivityRow) => row.lanes.length * LANE_H + 2 * ROW_PAD;
-	const tops = timeline.rows.reduce<number[]>(
-		(acc, row) => [...acc, (acc[acc.length - 1] ?? 0) + heightOf(row)],
-		[0],
-	);
-	const height = tops[tops.length - 1] ?? 0;
-	const barTop = (rowIndex: number, lane: number) =>
-		(tops[rowIndex] ?? 0) + ROW_PAD + lane * LANE_H + (LANE_H - BAR_H) / 2;
 	const nowAt = timeline.ticks.find((tick) => tick.label === 'Now');
+	// A row's box as it is drawn: full while shown, nothing while coming or going.
+	const rowStyle = (row: ShownRow) => ({
+		height: row.phase === 'shown' ? laneHeight(row.lanes) : 0,
+		opacity: row.phase === 'shown' ? 1 : 0,
+	});
+	const rowClass =
+		'overflow-hidden transition-[height,opacity] duration-300 ease-in-out motion-reduce:transition-none [&:not(:first-child)]:border-t';
 
 	return (
 		<div className="flex flex-col gap-3 text-sm">
 			<div className="flex overflow-hidden rounded-lg border">
 				<div className={cn(LABEL, 'min-w-0 border-r bg-muted/40')}>
-					{timeline.rows.map((row, index) => (
-						<AgentLabel
-							key={row.agentId}
-							row={row}
-							agent={agents.find((candidate) => candidate.id === row.agentId)}
-							height={heightOf(row)}
-							last={index === timeline.rows.length - 1}
-						/>
+					{rows.map((row) => (
+						<div key={row.agentId} className={rowClass} style={rowStyle(row)}>
+							<AgentLabel
+								row={row.row}
+								agent={agents.find((candidate) => candidate.id === row.agentId)}
+								height={laneHeight(row.lanes)}
+							/>
+						</div>
 					))}
 					<div className="h-7" />
 				</div>
 				<div className="min-w-0 flex-1 px-4">
-					<div ref={measure} className="relative" style={{height}}>
-						<svg width={width} height={height} className="absolute inset-0 block overflow-hidden">
-							<HatchDefs id={hatch} />
+					<div ref={measure} className="relative">
+						<svg aria-hidden className="absolute inset-0 h-full w-full overflow-hidden">
 							{timeline.ticks.map((tick) => (
 								<line
 									key={tick.px}
 									x1={tick.px}
 									x2={tick.px}
 									y1={0}
-									y2={height}
+									y2="100%"
 									className={tick === nowAt ? 'stroke-foreground/40' : 'stroke-border/70'}
 								/>
 							))}
-							{timeline.rows.slice(0, -1).map((row, index) => (
-								<line
-									key={row.agentId}
-									x1={0}
-									x2={width}
-									y1={tops[index + 1]}
-									y2={tops[index + 1]}
-									className="stroke-border/70"
-								/>
-							))}
-							{timeline.rows.map((row, rowIndex) => (
-								<g key={row.agentId} className={AGENT_COLOR_CLASSES[colorOf(row.agentId)]}>
-									{row.lanes.map((lane, laneIndex) =>
-										lane.map((bar) => (
-											<Fragment key={keyOf(bar)}>
+						</svg>
+						{rows.map((row) => (
+							<div key={row.agentId} className={cn(rowClass, 'relative')} style={rowStyle(row)}>
+								<svg
+									width={width}
+									height={laneHeight(row.lanes)}
+									className={cn(
+										'absolute top-0 left-0 block',
+										AGENT_COLOR_CLASSES[colorOf(row.agentId)],
+									)}
+								>
+									{barsOf(row).map(({bar, laneIndex}) => (
+										// The fade on coming in is on an inner group: its keyframes set a transform
+										// of their own, which must not undo the one that places the bar.
+										<g
+											key={keyOf(bar)}
+											className={MOVES}
+											style={{transform: `translate(0, ${barTop(laneIndex)}px)`}}
+										>
+											<g className="animate-in fade-in-0 duration-300 motion-reduce:animate-none">
 												<Track
 													span={bar}
-													y={barTop(rowIndex, laneIndex)}
+													y={0}
 													height={BAR_H}
 													clippedStart={bar.clippedStart}
 													clippedEnd={bar.clippedEnd}
@@ -148,40 +172,47 @@ export function ActivityTimeline({
 												/>
 												<RequestMarks
 													requests={bar.requests}
-													y={barTop(rowIndex, laneIndex) + BAR_H - REQUEST_INSET - REQUEST_H}
+													y={BAR_H - REQUEST_INSET - REQUEST_H}
 													height={REQUEST_H}
 												/>
 												{bar.status === 'running' && !bar.clippedEnd && (
-													<Pulse x={bar.end} y={barTop(rowIndex, laneIndex) + BAR_H / 2} />
+													<Pulse x={bar.end} y={BAR_H / 2} />
 												)}
-											</Fragment>
-										)),
-									)}
-								</g>
-							))}
-						</svg>
-						<div className="absolute inset-0">
-							{timeline.rows.map((row, rowIndex) =>
-								row.lanes.map((lane, laneIndex) =>
-									lane.map((bar) => (
+											</g>
+										</g>
+									))}
+								</svg>
+								<div
+									className="absolute top-0 left-0 w-full"
+									style={{height: laneHeight(row.lanes)}}
+								>
+									{barsOf(row).map(({bar, laneIndex}) => (
 										<Fragment key={keyOf(bar)}>
 											{(bar.tasks.length > 1 || bar.end - bar.start >= MIN_NAMED_PX) && (
 												<span
 													aria-hidden
-													className="pointer-events-none absolute truncate text-[11px] leading-3 text-foreground/90"
+													className={cn(
+														MOVES,
+														'pointer-events-none absolute truncate text-[11px] leading-3 text-foreground/90',
+													)}
 													style={{
 														left: bar.start + 6,
-														top: barTop(rowIndex, laneIndex) + 2,
+														top: barTop(laneIndex) + 2,
 														width: bar.end - bar.start - 12,
 													}}
 												>
 													{bar.tasks.length > 1 ? `${bar.tasks.length} tasks` : bar.tasks[0]?.title}
 												</span>
 											)}
-											<BarTarget bar={bar} top={barTop(rowIndex, laneIndex)} onZoom={onZoom} />
+											<BarTarget
+												bar={bar}
+												top={barTop(laneIndex)}
+												onZoom={onZoom}
+												backTo={backTo}
+											/>
 											<RequestTargets
 												requests={bar.requests}
-												top={barTop(rowIndex, laneIndex)}
+												top={barTop(laneIndex)}
 												height={BAR_H}
 												connections={connections}
 												forTask={(entry) =>
@@ -192,10 +223,10 @@ export function ActivityTimeline({
 												onOpen={onOpenEntry}
 											/>
 										</Fragment>
-									)),
-								),
-							)}
-						</div>
+									))}
+								</div>
+							</div>
+						))}
 					</div>
 					<AxisLabels ticks={timeline.ticks} width={width} />
 				</div>
@@ -212,11 +243,156 @@ export function ActivityTimeline({
 	);
 }
 
-// A bar's key: a bar of several tasks is never the same element as the bar of its first task
-// alone, which it turns into on zooming in, as the tooltip's listeners stay with the element.
-function keyOf(bar: ActivityBar): string {
-	const id = bar.tasks[0]?.id ?? '';
-	return bar.tasks.length > 1 ? `cluster:${id}` : id;
+// A row's bars with the lane each is in, as one list in a fixed order, so a bar that changes lane
+// stays the same element and slides there, rather than being drawn anew.
+function barsOf(row: ShownRow): Array<{bar: ActivityBar; laneIndex: number}> {
+	return (row.row?.lanes ?? [])
+		.flatMap((lane, laneIndex) => lane.map((bar) => ({bar, laneIndex})))
+		.sort((a, b) => keyOf(a.bar).localeCompare(keyOf(b.bar)));
+}
+
+// A row as it is shown: the agent's row from the layout, or none while the row is kept after its
+// tasks left the window; how many lanes tall it is drawn, never fewer than it had until the window
+// comes to rest; and whether it is coming, there or going.
+type ShownRow = {
+	agentId: string;
+	row: ActivityRow | null;
+	lanes: number;
+	phase: 'entering' | 'shown' | 'leaving';
+};
+
+// A row kept on screen, with the lanes it is drawn at.
+type Held = {agentId: string; lanes: number};
+
+// The rows to draw for the layout's rows: the layout's, and those kept from before the window
+// moved, in the order they came, each as tall as the most it has needed since the window last came
+// to rest. A new row comes in a moment after it is first drawn, so it grows from nothing. The
+// lane every bar is in is remembered, so the layout gives it the same one next time. A second
+// after the window stops moving, bars settle into the lowest lanes, a row whose agent has left
+// the window or that needs fewer lanes is let go, and one let go fades out before it is taken away.
+function useSettledRows(
+	timeline: ActivityLayout,
+	window: Window,
+	preferred: LanePreferences,
+	setPreferred: (next: LanePreferences) => void,
+): ShownRow[] {
+	const {rows} = timeline;
+	const [held, setHeld] = useState<Held[]>([]);
+	const [entered, setEntered] = useState<ReadonlySet<string>>(() => new Set());
+	const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set());
+	// The layout's shape the kept rows were last raised to.
+	const [seen, setSeen] = useState('');
+
+	const byAgent = new Map(rows.map((row) => [row.agentId, row]));
+	// The layout's rows slot in among those kept, each before the first kept row the layout puts
+	// after it.
+	const order = held.map((one) => one.agentId);
+	rows.forEach((row, index) => {
+		if (order.includes(row.agentId)) {
+			return;
+		}
+		const after = rows.slice(index + 1).find((candidate) => order.includes(candidate.agentId));
+		order.splice(after ? order.indexOf(after.agentId) : order.length, 0, row.agentId);
+	});
+	// What is kept now: what the layout needs, never less than what was kept.
+	const kept = order.map((agentId) => ({
+		agentId,
+		lanes: Math.max(
+			byAgent.get(agentId)?.lanes.length ?? 0,
+			held.find((one) => one.agentId === agentId)?.lanes ?? 0,
+		),
+	}));
+	// As the layout changes shape, what is kept grows with it at once, a row on its way out whose
+	// agent is back stays, and every bar's lane is remembered.
+	const signature = rows
+		.map((row) => `${row.agentId}:${row.lanes.map((lane) => lane.map(keyOf).join('+')).join('/')}`)
+		.join(',');
+	if (signature !== seen) {
+		setSeen(signature);
+		if (
+			kept.length !== held.length ||
+			kept.some(
+				(one, index) => one.agentId !== held[index]?.agentId || one.lanes !== held[index]?.lanes,
+			)
+		) {
+			setHeld(kept);
+		}
+		if ([...leaving].some((agentId) => byAgent.has(agentId))) {
+			setLeaving(new Set([...leaving].filter((agentId) => !byAgent.has(agentId))));
+		}
+		const assigned = laneAssignments(timeline);
+		if ([...assigned].some(([key, lane]) => preferred.get(key) !== lane)) {
+			setPreferred(new Map([...preferred, ...assigned]));
+		}
+	}
+	const shown = kept
+		.map((one): ShownRow => {
+			const phase = leaving.has(one.agentId)
+				? 'leaving'
+				: entered.has(one.agentId)
+					? 'shown'
+					: 'entering';
+			return {agentId: one.agentId, row: byAgent.get(one.agentId) ?? null, lanes: one.lanes, phase};
+		})
+		.filter((row) => row.lanes > 0);
+
+	// What the settle timer works from: the layout and the kept rows as they last were.
+	const latest = useRef({timeline, kept});
+	useEffect(() => {
+		latest.current = {timeline, kept};
+	});
+
+	// A frame after a row is first drawn, it is there, so it grows from nothing.
+	const present = rows.map((row) => row.agentId).join(',');
+	useEffect(() => {
+		const timer = setTimeout(() => {
+			setEntered((current) => {
+				const next = new Set([...current, ...present.split(',').filter(Boolean)]);
+				return next.size === current.size ? current : next;
+			});
+		}, 20);
+		return () => clearTimeout(timer);
+	}, [present]);
+
+	// A second after the window last moved, bars settle into the lowest lanes, and rows and lanes
+	// no longer needed go.
+	const from = window.from.getTime();
+	const to = window.to.getTime();
+	useEffect(() => {
+		let fade: ReturnType<typeof setTimeout> | undefined;
+		const settle = setTimeout(() => {
+			const needed = new Map(
+				latest.current.timeline.rows.map((row) => [
+					row.agentId,
+					row.lanes.filter((lane) => lane.length > 0).length,
+				]),
+			);
+			setPreferred(laneAssignments(latest.current.timeline, true));
+			setHeld((current) =>
+				current.map((one) => ({...one, lanes: needed.get(one.agentId) ?? one.lanes})),
+			);
+			const gone = latest.current.kept
+				.filter((one) => !needed.has(one.agentId))
+				.map((one) => one.agentId);
+			if (gone.length === 0) {
+				return;
+			}
+			setLeaving(new Set(gone));
+			fade = setTimeout(() => {
+				setHeld((current) => current.filter((one) => !gone.includes(one.agentId)));
+				setEntered((current) => new Set([...current].filter((agentId) => !gone.includes(agentId))));
+				setLeaving(new Set());
+			}, MOTION_MS);
+		}, SETTLE_MS);
+		return () => {
+			clearTimeout(settle);
+			if (fade !== undefined) {
+				clearTimeout(fade);
+			}
+		};
+	}, [from, to, setPreferred]);
+
+	return shown;
 }
 
 // An agent's row is named by the agent, opening its page, with how many tasks it has under way,
@@ -225,24 +401,25 @@ function AgentLabel({
 	row,
 	agent,
 	height,
-	last,
 }: {
-	row: ActivityRow;
+	row: ActivityRow | null;
 	agent: AgentLogin | undefined;
 	height: number;
-	last: boolean;
 }) {
 	const org = useOrgSlug();
-	const count = row.lanes.flat().reduce((total, bar) => total + bar.tasks.length, 0);
-	const aside = (
+	const count = row?.lanes.flat().reduce((total, bar) => total + bar.tasks.length, 0) ?? 0;
+	const working = row?.working ?? 0;
+	const aside = row && (
 		<span className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground tabular-nums">
-			{row.working > 0 ? `${row.working} under way` : `${count} ${count === 1 ? 'task' : 'tasks'}`}
+			{working > 0 ? `${working} under way` : `${count} ${count === 1 ? 'task' : 'tasks'}`}
 		</span>
 	);
-	const className = cn('flex items-center gap-2 pr-3 pl-3', !last && 'border-b');
+	// Level with the first lane's bar, rather than in the middle of however many lanes there are.
+	const className = 'flex items-center gap-2 pr-3 pl-3';
+	const style = {height, paddingTop: barTop(0), paddingBottom: height - barTop(0) - BAR_H};
 	if (!agent) {
 		return (
-			<div className={className} style={{height}}>
+			<div className={className} style={style}>
 				<span className="size-5 shrink-0 rounded-md border border-dashed" />
 				<span className="truncate font-medium">Deleted agent</span>
 				{aside}
@@ -253,7 +430,7 @@ function AgentLabel({
 		<Link
 			to={`/${org}/agents/${encodeURIComponent(agent.id)}`}
 			className={cn(className, 'hover:bg-muted')}
-			style={{height}}
+			style={style}
 		>
 			<AgentLogo providerId={agent.providerId} />
 			<span className="truncate font-medium">{agent.name}</span>
@@ -268,10 +445,12 @@ function BarTarget({
 	bar,
 	top,
 	onZoom,
+	backTo,
 }: {
 	bar: ActivityBar;
 	top: number;
 	onZoom: (from: number, to: number) => void;
+	backTo: string;
 }) {
 	const org = useOrgSlug();
 	const [task] = bar.tasks;
@@ -281,8 +460,10 @@ function BarTarget({
 		top,
 		height: BAR_H,
 	};
-	const className =
-		'absolute rounded-md hover:bg-foreground/5 focus-visible:outline-2 focus-visible:outline-ring';
+	const className = cn(
+		MOVES,
+		'absolute rounded-md hover:bg-foreground/5 focus-visible:outline-2 focus-visible:outline-ring',
+	);
 	if (!task) {
 		return null;
 	}
@@ -322,6 +503,7 @@ function BarTarget({
 				render={
 					<Link
 						to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
+						state={{back: backTo}}
 						preventScrollReset
 						aria-label={task.title}
 						className={className}
