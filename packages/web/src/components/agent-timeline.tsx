@@ -1,14 +1,15 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {getActivityTimeline} from '@/client/agents-client';
-import type {ActivityTimeline} from '@/client/schemas';
+import type {ActivityTimeline as ActivityAnswer} from '@/client/schemas';
 import {AuditEntryDialog} from '@/components/audit-entry-dialog';
-import {TaskTimeline} from '@/components/task-timeline';
+import {ActivityTimeline} from '@/components/activity-timeline';
 import {useOrgSlug} from '@/hooks/use-org';
 import {
 	DEFAULT_MINUTES,
 	endedAt,
 	LOADED_MINUTES,
 	MAX_MINUTES,
+	MIN_MINUTES,
 	presetOf,
 	windowLabel,
 	WINDOWS,
@@ -39,12 +40,13 @@ const LABELS_PX = 240;
 const CUSTOM = 'custom';
 
 // Under the home page's input: who is doing what for the person. Every agent's row over the tasks
-// it handed to its sub-agents in a window of time, up to now at the right edge, each with the
-// requests made for it; a task's name opens its page, and a request opens in full. The window's
+// it was given in a window of time, up to now at the right edge, each with the requests made for
+// it; a task's bar opens its page, and a request opens in full. The window's
 // length is chosen above the timeline, or zoomed with Ctrl or Cmd and the wheel, or a pinch, as a
 // video editor's timeline is, its end staying where it is; zoomed to a length not on offer, the
 // choice reads Custom. Scrolling sideways, or with Shift, moves it back in time and forward again
-// up to now, where it follows now once more; Now brings it straight back. The timeline is read
+// up to now, where it follows now once more; Now brings it straight back. A bar of several short
+// tasks zooms the window in on them. The timeline is read
 // again every minute, always at least a day back. With no task in that much, there is nothing to
 // show, and it stays off the page.
 export function AgentTimeline({
@@ -52,7 +54,7 @@ export function AgentTimeline({
 	agents,
 	connections,
 }: {
-	initial: ActivityTimeline;
+	initial: ActivityAnswer;
 	agents: AgentLogin[];
 	connections: Connection[];
 }) {
@@ -132,6 +134,19 @@ export function AgentTimeline({
 		return () => element.removeEventListener('wheel', onWheel);
 	}, []);
 
+	// The window zoomed in on a stretch of time: a little longer than it, centred on it, ending at
+	// now where the stretch runs up to it.
+	const zoomTo = (from: number, to: number) => {
+		const length = Math.max(to - from, MIN_MINUTES * MINUTE_MS);
+		const padded = Math.min(
+			Math.max(length * 1.25, MIN_MINUTES * MINUTE_MS),
+			MAX_MINUTES * MINUTE_MS,
+		);
+		setMinutes(Math.round(padded / MINUTE_MS));
+		const endAt = to + (padded - length) / 2;
+		setEnd(endAt >= Date.now() ? null : endAt);
+	};
+
 	// Nothing in the past day, or further back where the window reaches: nothing to show at all.
 	if (answer.tasks.length === 0) {
 		return null;
@@ -181,7 +196,7 @@ export function AgentTimeline({
 			</div>
 			<div ref={listenForZoom} className="w-full">
 				{inWindow && (
-					<TaskTimeline
+					<ActivityTimeline
 						tasks={answer.tasks}
 						entries={answer.entries}
 						now={answer.now}
@@ -189,6 +204,7 @@ export function AgentTimeline({
 						agents={agents}
 						connections={connections}
 						onOpenEntry={setOpened}
+						onZoom={zoomTo}
 					/>
 				)}
 				{!inWindow && (

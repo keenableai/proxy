@@ -76,7 +76,7 @@ const activity: ActivityTimeline = {
 };
 
 // What the home route's loader answers: the connections and agent logins, for the logos, and
-// what the agents are doing, for the lanes.
+// what the agents are doing, for the timeline.
 let home: {
 	connections: ReturnType<typeof connection>[];
 	agents: ReturnType<typeof agent>[];
@@ -186,14 +186,13 @@ describe('HomePage', () => {
 		home = before;
 	});
 
-	test('shows who is doing what, tasks one after another sharing a lane named by the first', async () => {
+	test('shows who is doing what: every agent’s row, with a bar for each of its tasks leading to its page', async () => {
 		renderHomePage();
 
-		// The Acme call was done before the inbox was started: one lane, named by the earlier.
-		const lane = await screen.findByRole('link', {name: /Prepare for the Acme call.*\+1/});
-		expect(lane.getAttribute('href')).toBe('/acme/activity/tasks/t2');
-		expect(screen.getByRole('region', {name: 'Agents'})).toBeTruthy();
-		// Each task's bar leads to its page too.
+		expect(await screen.findByRole('region', {name: 'Agents'})).toBeTruthy();
+		// The agent's row is named by the agent, opening its page.
+		expect(screen.getByRole('link', {name: /Claude/}).getAttribute('href')).toBe('/acme/agents/a1');
+		// Each task's bar leads to its page.
 		expect(screen.getByRole('link', {name: 'Triage inbox'}).getAttribute('href')).toBe(
 			'/acme/activity/tasks/t1',
 		);

@@ -56,6 +56,17 @@ describe('the window', () => {
 		]);
 	});
 
+	test('never takes a step longer than half the window, however little room there is', () => {
+		// Six days over room for six labels: a day apart would be one too many, a week too long.
+		expect(gridlines(6 * 24 * 60 + 11, 0, 6).map((line) => line.ago)).toEqual([
+			6 * 24 * 60,
+			4 * 24 * 60,
+			2 * 24 * 60,
+			0,
+		]);
+		expect(gridlines(100, 0, 2).map((line) => line.ago)).toEqual([90, 60, 30, 0]);
+	});
+
 	test('takes a longer step where its own would give more lines than there is room to label', () => {
 		expect(gridlines(60, 0, 2).map((line) => line.ago)).toEqual([30, 0]);
 		expect(gridlines(24 * 60, 0, 4).map((line) => line.ago)).toEqual([18 * 60, 12 * 60, 6 * 60, 0]);

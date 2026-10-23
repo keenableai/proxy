@@ -74,6 +74,12 @@ function describeMinutes(minutes: number): string {
 // never finished is taken as abandoned (@proxy/utils/tasks).
 export type TaskStatus = 'running' | 'finished' | 'abandoned';
 
+export const STATUS_LABEL: Record<TaskStatus, string> = {
+	running: 'Under way',
+	finished: 'Finished',
+	abandoned: 'Abandoned',
+};
+
 // When it was started and finished, all a task's status needs.
 type TaskTimes = Pick<ActivityTask, 'startedAt' | 'finishedAt'>;
 
@@ -99,11 +105,26 @@ export function taskStatus(task: TaskTimes, now: Date): TaskStatus {
 // quarter hour over an hour, an hour over six, three over a day; one zoomed to takes the largest
 // that still gives it a few stretches.
 const PRESET_STEPS: Record<WindowId, number> = {'1h': 15, '6h': 60, '24h': 3 * 60};
-const STEPS = [5, 10, 15, 30, 60, 2 * 60, 3 * 60, 6 * 60, 12 * 60, 24 * 60, 7 * 24 * 60];
+const STEPS = [
+	5,
+	10,
+	15,
+	30,
+	60,
+	2 * 60,
+	3 * 60,
+	6 * 60,
+	12 * 60,
+	24 * 60,
+	2 * 24 * 60,
+	3 * 24 * 60,
+	7 * 24 * 60,
+];
 const MIN_STRETCHES = 5;
 
 // The window's own step, or, where that would give it more lines than there is room to label, the
-// least step that gives no more than `maxLines`.
+// least step that gives no more than `maxLines`, but never one longer than half the window, so
+// there is always a line or two to read it by.
 function stepOf(minutes: number, maxLines: number): number {
 	const preset = presetOf(minutes);
 	const own = preset
@@ -114,7 +135,11 @@ function stepOf(minutes: number, maxLines: number): number {
 	if (minutes / own <= maxLines) {
 		return own;
 	}
-	return STEPS.find((candidate) => minutes / candidate <= maxLines) ?? minutes;
+	const fewer = STEPS.find((candidate) => minutes / candidate <= maxLines) ?? minutes;
+	if (fewer <= minutes / 2) {
+		return fewer;
+	}
+	return [...STEPS].reverse().find((candidate) => candidate <= minutes / 2) ?? own;
 }
 
 /**

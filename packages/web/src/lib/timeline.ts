@@ -1,0 +1,160 @@
+import type {AuditEntry} from '@/lib/types';
+
+// What the two timelines share: the task page's, of one run, and the home page's, of every agent
+// over a window of time. Both lay out in pixels, measured from the chart's left edge, so that how
+// wide a thing is drawn is a plain number: a request too short to see is still drawn two pixels
+// wide, a task too short to name is grouped with its neighbors, and so on.
+
+export const SECOND = 1000;
+export const MINUTE = 60 * SECOND;
+export const HOUR = 60 * MINUTE;
+
+// A stretch of the chart, in pixels from its left edge.
+export type Span = {start: number; end: number};
+
+// A request, where it ran: from when it came in to when it was done, on the task it was made for.
+export type TimelineRequest = Span & {entry: AuditEntry};
+
+// The agents' colors, as classes setting the text color, which the charts' shapes take as
+// currentColor: the reference palette's blue, magenta, green, violet and aqua, in an order whose
+// neighbors stay apart for color-blind eyes, each stepped for the dark theme. Its orange, yellow
+// and red are left out, as amber and red mean a request was blocked or failed.
+export const AGENT_COLOR_CLASSES = [
+	'text-[#2a78d6] dark:text-[#3987e5]',
+	'text-[#d55181] dark:text-[#e87ba4]',
+	'text-[#008300] dark:text-[#2ea043]',
+	'text-[#6250d6] dark:text-[#9085e9]',
+	'text-[#1a9d6e] dark:text-[#2cb784]',
+] as const;
+
+// How faint a task's track is, and one given up.
+export const TRACK_OPACITY = 0.2;
+export const ABANDONED_OPACITY = 0.1;
+
+// A track is drawn at least this wide, so a task done in a moment still reads as one.
+export const MIN_TRACK_PX = 6;
+
+// How many colors agents are drawn in (AGENT_COLOR_CLASSES). An agent keeps its color wherever it
+// appears, so the same agent is the same color on every visit.
+const AGENT_COLORS = AGENT_COLOR_CLASSES.length;
+
+/** One of the agent colors for an id: the same every time, spread evenly over the ids. */
+export function colorOf(id: string): number {
+	let hash = 0;
+	for (const char of id) {
+		hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+	}
+	return hash % AGENT_COLORS;
+}
+
+/** "850ms", "1.2s", "5s", "12s", "2m 5s", "1h 4m", "2d 3h": how long something took, as short as it reads. */
+export function formatDuration(ms: number): string {
+	if (ms < SECOND) {
+		return `${Math.round(ms)}ms`;
+	}
+	if (ms < 10 * SECOND) {
+		const seconds = ms / SECOND;
+		return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
+	}
+	if (ms < MINUTE) {
+		return `${Math.round(ms / SECOND)}s`;
+	}
+	if (ms < HOUR) {
+		const seconds = Math.round((ms % MINUTE) / SECOND);
+		const minutes = Math.floor(ms / MINUTE);
+		return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+	}
+	if (ms < 48 * HOUR) {
+		const minutes = Math.round((ms % HOUR) / MINUTE);
+		const hours = Math.floor(ms / HOUR);
+		return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+	}
+	const hours = Math.round((ms % (24 * HOUR)) / HOUR);
+	const days = Math.floor(ms / (24 * HOUR));
+	return hours === 0 ? `${days}d` : `${days}d ${hours}h`;
+}
+
+/** "40s", "48m", "3h", "2d": about how long, in one unit, for where there is no room for more. */
+export function roughDuration(ms: number): string {
+	if (ms < MINUTE) {
+		return `${Math.max(Math.round(ms / SECOND), 1)}s`;
+	}
+	if (ms < HOUR) {
+		return `${Math.round(ms / MINUTE)}m`;
+	}
+	if (ms < 48 * HOUR) {
+		return `${Math.round(ms / HOUR)}h`;
+	}
+	return `${Math.round(ms / (24 * HOUR))}d`;
+}
+
+/** The spans, sorted, with those that overlap or come within `gap` of one another made one. */
+export function merged(spans: Span[], gap = 0): Span[] {
+	const sorted = [...spans].sort((a, b) => a.start - b.start);
+	const out: Span[] = [];
+	for (const span of sorted) {
+		const last = out.at(-1);
+		if (last && span.start <= last.end + gap) {
+			last.end = Math.max(last.end, span.end);
+			continue;
+		}
+		out.push({...span});
+	}
+	return out;
+}
+
+/** When a request ran, in milliseconds since the epoch: from when it came in to when it was logged, done. */
+export function requestTimes(entry: AuditEntry): {from: number; to: number} {
+	const to = new Date(entry.at).getTime();
+	return {from: to - (entry.durationMs ?? 0), to};
+}
+
+/** "3 requests · 1 blocked · 2 failed": what was made for a task, where anything was. */
+export function requestSummary(requests: TimelineRequest[]): string[] {
+	const blocked = requests.filter((request) => request.entry.outcome === 'denied').length;
+	const failed = requests.filter((request) => request.entry.outcome === 'failed').length;
+	return [
+		...(requests.length > 0 ? [`${requests.length} requests`] : []),
+		...(blocked > 0 ? [`${blocked} blocked`] : []),
+		...(failed > 0 ? [`${failed} failed`] : []),
+	];
+}
+
+// A request is drawn at least this wide, so one done in a moment still shows.
+const MIN_REQUEST_PX = 2;
+
+/**
+ * The requests of `entries` laid along the chart by `px`, which maps a time to pixels, those that
+ * ran outside `from` and `to` left out, in the order they came in.
+ */
+export function layRequests(
+	entries: AuditEntry[],
+	px: (ms: number) => number,
+	from: number,
+	to: number,
+): TimelineRequest[] {
+	return entries
+		.flatMap((entry) => {
+			const ran = requestTimes(entry);
+			if (ran.to < from || ran.from > to) {
+				return [];
+			}
+			const start = px(Math.max(ran.from, from));
+			return [{entry, start, end: Math.max(px(Math.min(ran.to, to)), start + MIN_REQUEST_PX)}];
+		})
+		.sort((a, b) => a.start - b.start);
+}
+
+// The steps an axis is marked off in.
+const STEPS = [1, 2, 5, 10, 15, 30]
+	.map((s) => s * SECOND)
+	.concat(
+		[1, 2, 5, 10, 15, 30].map((m) => m * MINUTE),
+		[1, 2, 3, 6, 12, 24].map((h) => h * HOUR),
+		[2, 7, 14, 30].map((d) => d * 24 * HOUR),
+	);
+
+/** The least step that spaces marks at least `labelPx` apart over `ms` drawn `px` wide. */
+export function stepFor(ms: number, px: number, labelPx: number): number {
+	return STEPS.find((step) => (step / ms) * px >= labelPx) ?? STEPS[STEPS.length - 1] ?? ms;
+}

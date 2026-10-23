@@ -6,12 +6,12 @@ import {AuditList} from '@/components/audit-list';
 import {BackButton} from '@/components/back-button';
 import {AgentLogo} from '@/components/brand-logo';
 import {NotFound} from '@/components/not-found';
-import {TaskTimeline} from '@/components/task-timeline';
+import {RunTimeline} from '@/components/run-timeline';
 import {useOrgSlug} from '@/hooks/use-org';
-import {endedAt, taskStatus} from '@/lib/timeline-window';
+import {endedAt, STATUS_LABEL, taskStatus} from '@/lib/timeline-window';
 import {counted, formatDateTime} from '@/lib/format';
-import {formatDuration} from '@/lib/task-timeline';
-import type {ActivityTask, AuditEntry} from '@/lib/types';
+import {formatDuration} from '@/lib/timeline';
+import type {AuditEntry} from '@/lib/types';
 import type {taskLoader} from '@/loaders';
 import {Badge} from '@proxy/ui/components/badge';
 
@@ -19,10 +19,8 @@ import {Badge} from '@proxy/ui/components/badge';
 // works.
 const REFRESH_MS = 5 * 1000;
 
-const STATUS_LABEL = {running: 'Under way', finished: 'Finished', abandoned: 'Abandoned'} as const;
-
 // One task of an agent's, in the run of its tasks it is in: what the task set out to do and how it
-// went, then the run's timeline, the agent's row on top and every task of the run under it, and
+// went, then the run's timeline, every task of the run under the one it was handed from, and
 // every request made for any of them, as the activity log lists them. Agents work through
 // sub-agents, so a task is one of them at work, and the run is what the agent did in one go. Read
 // again every few seconds while a task of the run is under way.
@@ -120,13 +118,12 @@ export function TaskPage() {
 						</span>
 					))}
 				</p>
-				<TaskTimeline
+				<RunTimeline
 					tasks={run.tasks}
-					focus={task.id}
-					unfolded={handedFrom(run.tasks, task)}
 					entries={run.entries}
 					now={run.now}
-					agents={agents}
+					agentId={run.agentId}
+					focus={task.id}
 					connections={connections}
 					onOpenEntry={setOpened}
 				/>
@@ -157,13 +154,4 @@ function countOutcomes(entries: AuditEntry[]): string[] {
 		...(blocked > 0 ? [`${blocked} blocked`] : []),
 		...(failed > 0 ? [`${failed} failed`] : []),
 	];
-}
-
-// The tasks the task was handed from, up to the first, which are unfolded so it shows.
-function handedFrom(tasks: ActivityTask[], task: ActivityTask): string[] {
-	const parent = tasks.find((candidate) => candidate.id === task.parentId);
-	if (!parent) {
-		return [];
-	}
-	return [parent.id, ...handedFrom(tasks, parent)];
 }
