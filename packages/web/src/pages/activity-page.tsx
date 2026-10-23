@@ -1,7 +1,7 @@
 import {taskEndedAt} from '@proxy/utils/tasks';
 import {XIcon} from 'lucide-react';
 import {useState} from 'react';
-import {useLoaderData, useSearchParams} from 'react-router';
+import {Link, useLoaderData, useSearchParams} from 'react-router';
 import {AppShell, PageTitle} from '@/components/app-shell';
 import {AuditList} from '@/components/audit-list';
 import {
@@ -14,6 +14,7 @@ import {
 import {Button} from '@proxy/ui/components/button';
 import {AgentLogo} from '@/components/brand-logo';
 import {Badge} from '@proxy/ui/components/badge';
+import {useOrgSlug} from '@/hooks/use-org';
 import {connectionLabel} from '@/lib/access';
 import {formatDateTime} from '@/lib/format';
 import type {ActivityTask, AgentLogin} from '@/lib/types';
@@ -118,6 +119,7 @@ function TaskCard({
 	agent: AgentLogin | undefined;
 	onClear: () => void;
 }) {
+	const org = useOrgSlug();
 	return (
 		<div className="relative flex flex-col gap-1.5 rounded-lg border px-4 py-3 pr-12 text-sm">
 			<Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={onClear}>
@@ -127,6 +129,12 @@ function TaskCard({
 			<div className="flex flex-wrap items-center gap-2">
 				<span className="font-medium">{task.title}</span>
 				<TaskBadge task={task} />
+				<Link
+					to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
+					className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+				>
+					Timeline
+				</Link>
 			</div>
 			<p className="text-muted-foreground">{task.goal}</p>
 			<p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">

@@ -202,3 +202,21 @@ export async function listAgentTasks(
 		}),
 	);
 }
+
+/** The agent's tasks the viewer sees started from `from` to `to`, the first `take`, in the order started. */
+export async function listAgentTasksBetween(
+	viewer: Viewer,
+	agentId: string,
+	from: Date,
+	to: Date,
+	take: number,
+): Promise<Result<AgentTaskRow[], ApiError>> {
+	return wrapDb(() =>
+		db.agentTask.findMany({
+			where: {...visibleTo(viewer), agentId, createdAt: {gte: from, lte: to}},
+			select: taskSelect,
+			orderBy: {createdAt: 'asc'},
+			take,
+		}),
+	);
+}

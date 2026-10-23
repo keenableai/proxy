@@ -1,10 +1,11 @@
 import type {AgentProviderId} from '@proxy/integrations';
 import {z} from 'zod';
 import {
-	activityLanesSchema,
 	activityTaskSchema,
+	activityTimelineSchema,
 	agentSchema,
 	auditEntrySchema,
+	taskRunSchema,
 } from '@/client/schemas';
 import {apiRequest, apiSend, orgApi} from '@/client/request';
 
@@ -116,11 +117,20 @@ export function listActivity(org: string, filter: ActivityFilter) {
 	);
 }
 
-/** The home page's lanes: every task under way at some point since `from`, an ISO instant, with what was done for each. */
-export function getActivityLanes(org: string, from: string) {
+/** A task's page: the run of its agent's tasks it is in, and every request made for them. */
+export function getTaskRun(org: string, taskId: string) {
 	return apiRequest(
 		'GET',
-		`${orgApi(org)}/activity/lanes?${new URLSearchParams({from})}`,
-		activityLanesSchema,
+		`${orgApi(org)}/activity/tasks/${encodeURIComponent(taskId)}`,
+		taskRunSchema,
+	);
+}
+
+/** The home page's timeline: every task under way at some point since `from`, an ISO instant, with every request made for them. */
+export function getActivityTimeline(org: string, from: string) {
+	return apiRequest(
+		'GET',
+		`${orgApi(org)}/activity/timeline?${new URLSearchParams({from})}`,
+		activityTimelineSchema,
 	);
 }

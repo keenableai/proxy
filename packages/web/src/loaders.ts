@@ -1,8 +1,9 @@
 import {getSignInMethods} from '@/client/auth-client';
 import {
 	type ActivityFilter,
-	getActivityLanes,
+	getActivityTimeline,
 	getAgent,
+	getTaskRun,
 	listActivity,
 	listAgents,
 	listMcpClients,
@@ -13,7 +14,7 @@ import {getAuthorizationRequest} from '@/client/oauth-client';
 import {getInvitation, getOrg, listMembers, listOrgs} from '@/client/orgs-client';
 import {listRecords} from '@/client/records-client';
 import {VAULT_INTEGRATION_ID} from '@proxy/integrations';
-import {LOADED_MINUTES, windowStart} from '@/lib/agent-lanes';
+import {LOADED_MINUTES, windowStart} from '@/lib/timeline-window';
 import {unwrapLoaderResult, unwrapOrNull} from '@/lib/loader-utils';
 import {pendingAgent} from '@/lib/pending-agent';
 import {redirect} from 'react-router';
@@ -29,14 +30,14 @@ function orgOf({params}: OrgParams): string {
 }
 
 // Home: what is connected, for the logos under its input, and what the agents are doing, for the
-// lanes under them. The page works without them, so a list the api doesn't answer shows as empty,
-// and lanes it doesn't as none, rather than as an error.
+// timeline under them. The page works without them, so a list the api doesn't answer shows as
+// empty, and a timeline it doesn't as none, rather than as an error.
 export async function homeLoader(args: OrgParams) {
 	const org = orgOf(args);
 	const [connections, agents, activity] = await Promise.all([
 		listConnections(org),
 		listAgents(org),
-		getActivityLanes(org, windowStart(LOADED_MINUTES, new Date()).toISOString()),
+		getActivityTimeline(org, windowStart(LOADED_MINUTES, new Date()).toISOString()),
 	]);
 	return {
 		connections: connections.map((answer) => answer.connections).unwrapOr([]),
@@ -164,6 +165,23 @@ export async function activityLoader(args: OrgParams & {request: Request}) {
 	return {
 		entries,
 		tasks,
+		connections: unwrapLoaderResult(connections).connections,
+		agents: unwrapLoaderResult(agents).agents,
+	};
+}
+
+// A task's page: the run of its agent's tasks it is in, and every request made for them, with the
+// connections and agents to name what each request used and who made it. Null where the task is
+// not one the person sees, so the page says so in its own frame.
+export async function taskLoader(args: {params: {org?: string; taskId?: string}}) {
+	const org = orgOf(args);
+	const [run, connections, agents] = await Promise.all([
+		getTaskRun(org, args.params.taskId ?? ''),
+		listConnections(org),
+		listAgents(org),
+	]);
+	return {
+		run: unwrapOrNull(run),
 		connections: unwrapLoaderResult(connections).connections,
 		agents: unwrapLoaderResult(agents).agents,
 	};

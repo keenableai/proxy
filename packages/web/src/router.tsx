@@ -27,11 +27,13 @@ import {
 	homeLoader,
 	inviteLoader,
 	membersLoader,
+	taskLoader,
 	vaultLoader,
 	welcomeConnectionLoader,
 	welcomeLoader,
 } from '@/loaders';
 import {ActivityPage} from '@/pages/activity-page';
+import {TaskPage} from '@/pages/task-page';
 import {AddBankPage} from '@/pages/add-bank-page';
 import {AddConnectionPage} from '@/pages/add-connection-page';
 import {AddDatabasePage} from '@/pages/add-database-page';
@@ -247,6 +249,7 @@ export const router = createBrowserRouter([
 			{path: '/:org/agents/:id', loader: agentLoader, element: <AgentPage />},
 			{path: '/:org/agents/:id/setup', loader: agentSetupLoader, element: <AgentSetupPage />},
 			{path: '/:org/activity', loader: activityLoader, element: <ActivityPage />},
+			{path: '/:org/activity/tasks/:taskId', loader: taskLoader, element: <TaskPage />},
 			{path: '/:org/members', loader: membersLoader, element: <MembersPage />},
 			{path: '/:org/settings', element: <SettingsPage />},
 		],

@@ -32,6 +32,23 @@ export type AuditEntryRow = {
 	createdAt: Date;
 };
 
+const entrySelect = {
+	id: true,
+	agentId: true,
+	connectionId: true,
+	collectionId: true,
+	action: true,
+	recordTitle: true,
+	query: true,
+	outcome: true,
+	via: true,
+	taskId: true,
+	durationMs: true,
+	userId: true,
+	error: true,
+	createdAt: true,
+} as const;
+
 /** Logs one request of an agent, made for one of its tasks, and marks the agent active now. */
 export async function logAgentRequest(data: {
 	orgId: string;
@@ -112,69 +129,48 @@ export async function listAuditEntries(
 			where: {...visibleTo(viewer), ...filter},
 			orderBy: {createdAt: 'desc'},
 			take,
-			select: {
-				id: true,
-				agentId: true,
-				connectionId: true,
-				collectionId: true,
-				action: true,
-				recordTitle: true,
-				query: true,
-				outcome: true,
-				via: true,
-				taskId: true,
-				durationMs: true,
-				userId: true,
-				error: true,
-				createdAt: true,
-			},
+			select: entrySelect,
 		}),
 	);
 }
 
-export type TaskRequestSummary = {
-	taskId: string;
-	connectionId: string;
-	outcome: AuditOutcome;
-	count: number;
-	// When the first of these requests was made.
-	first: Date;
-};
-
-/**
- * The requests the viewer sees among those made for each of `taskIds`, counted by connection and
- * outcome: a shared agent's task keeps the requests its former owner made on their own connections
- * to themselves.
- */
-export async function summarizeTaskRequests(
+/** The requests the viewer sees made for any of `taskIds`, in the order they were made, the first `take`. */
+export async function listTaskEntries(
 	viewer: Viewer,
 	taskIds: string[],
-): Promise<Result<TaskRequestSummary[], ApiError>> {
+	take: number,
+): Promise<Result<AuditEntryRow[], ApiError>> {
+	return wrapDb(() =>
+		db.auditEntry.findMany({
+			where: {...visibleTo(viewer), taskId: {in: taskIds}},
+			orderBy: {createdAt: 'asc'},
+			take,
+			select: entrySelect,
+		}),
+	);
+}
+
+/** When the last request the viewer sees was made for each of `taskIds`; a task with none is left out. */
+export async function listLastTaskRequests(
+	viewer: Viewer,
+	taskIds: string[],
+): Promise<Result<Array<{taskId: string; at: Date}>, ApiError>> {
 	if (taskIds.length === 0) {
 		return wrapDb(async () => []);
 	}
 	const grouped = await wrapDb(() =>
 		db.auditEntry.groupBy({
-			by: ['taskId', 'connectionId', 'outcome'],
+			by: ['taskId'],
 			where: {...visibleTo(viewer), taskId: {in: taskIds}},
-			_count: {_all: true},
-			_min: {createdAt: true},
+			_max: {createdAt: true},
 		}),
 	);
 	return grouped.map((rows) =>
 		rows.flatMap((row) => {
-			if (row.taskId === null || row._min.createdAt === null) {
+			if (row.taskId === null || row._max.createdAt === null) {
 				return [];
 			}
-			return [
-				{
-					taskId: row.taskId,
-					connectionId: row.connectionId,
-					outcome: row.outcome,
-					count: row._count._all,
-					first: row._min.createdAt,
-				},
-			];
+			return [{taskId: row.taskId, at: row._max.createdAt}];
 		}),
 	);
 }

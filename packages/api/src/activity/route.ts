@@ -1,13 +1,15 @@
-import type {Result} from 'ts-results-es';
+import {Err, type Result} from 'ts-results-es';
 import {z} from 'zod';
 
-import {type ApiError, Do, parseSchema} from '@proxy/utils';
-import {listAuditEntries, summarizeTaskRequests} from '@proxy/db/audit';
+import {ApiErr, type ApiError, Do, parseSchema} from '@proxy/utils';
+import {type AuditEntryRow, listAuditEntries, listLastTaskRequests, listTaskEntries} from '@proxy/db/audit';
 import {listMemberNames} from '@proxy/db/organization';
-import {type AgentTaskRow, listAgentTasks, listAgentTasksSince} from '@proxy/db/task';
+import {type AgentTaskRow, listAgentTasks, listAgentTasksBetween, listAgentTasksSince} from '@proxy/db/task';
+import type {Viewer} from '@proxy/db/viewer';
 
 import type {AuthenticatedRequest} from '../server/middleware/require-auth';
 import {requireViewer} from '../utils/user-org';
+import {runAround} from './runs';
 
 const MAX_ENTRIES = 500;
 
@@ -89,68 +91,115 @@ export function handleListActivityRoute(request: AuthenticatedRequest): Promise<
 		};
 		const rows = $(await listAuditEntries(viewer, filter, MAX_ENTRIES));
 		const taskIds = new Set([...rows.flatMap((row) => (row.taskId === null ? [] : [row.taskId])), ...(taskId === undefined ? [] : [taskId])]);
-		const userIds = new Set(rows.flatMap((row) => (row.userId === null ? [] : [row.userId])));
 		const tasks = $(await listAgentTasks(viewer, [...taskIds]));
+		return {entries: $(await toEntries(viewer, rows)), tasks: tasks.map(toActivityTask)};
+	});
+}
+
+// The entries as the web app reads them, each with the name of the member who asked, where one did.
+function toEntries(viewer: Viewer, rows: AuditEntryRow[]): Promise<Result<AuditEntryResponse[], ApiError>> {
+	return Do(async ($) => {
+		const userIds = new Set(rows.flatMap((row) => (row.userId === null ? [] : [row.userId])));
 		const names = $(await listMemberNames([...userIds].map((userId) => ({orgId: viewer.orgId, userId}))));
 		const nameOf = (userId: string | null) => names.find((member) => member.userId === userId)?.name ?? null;
+		return rows.map(({createdAt, ...entry}) => ({...entry, at: createdAt.toISOString(), userName: nameOf(entry.userId)}));
+	});
+}
+
+// A task's page: the agent's tasks started this far either side of the task, to find its run
+// among, at most this many of them, and at most this many requests made for the run's tasks.
+const RUN_REACH_MS = 24 * 60 * 60 * 1000;
+const MAX_RUN_TASKS = 500;
+const MAX_RUN_ENTRIES = 2000;
+
+export type TaskRunResponse = {
+	// When the answer was made: where a task still under way has got to.
+	now: string;
+	// The task the page is about, among `tasks`.
+	task: string;
+	// The agent whose run it is.
+	agentId: string;
+	// Every task of the run the task is in (runs.ts), in the order started: what the agent did in one go.
+	tasks: ActivityTaskResponse[];
+	// Every request made for them, in the order they were made.
+	entries: AuditEntryResponse[];
+};
+
+/** `GET /activity/tasks/:taskId`: a task the person sees, the run of its agent's tasks it is in, and every request made for them. */
+export function handleTaskRunRoute(request: AuthenticatedRequest): Promise<Result<TaskRunResponse, ApiError>> {
+	return Do(async ($) => {
+		const taskId = request.params.taskId ?? '';
+		const viewer = $(await requireViewer(request));
+		const now = new Date();
+		const [task] = $(await listAgentTasks(viewer, [taskId]));
+		if (task === undefined) {
+			return $(Err(ApiErr.notFound('task', taskId)));
+		}
+		const started = task.createdAt.getTime();
+		const around = $(await listAgentTasksBetween(viewer, task.agentId, new Date(started - RUN_REACH_MS), new Date(started + RUN_REACH_MS), MAX_RUN_TASKS));
+		const lastRequests = $(
+			await listLastTaskRequests(
+				viewer,
+				around.map((row) => row.id),
+			),
+		);
+		const lastOf = new Map(lastRequests.map((row) => [row.taskId, row.at]));
+		const ids = runAround(
+			around.map((row) => ({id: row.id, startedAt: row.createdAt, activeUntil: row.finishedAt ?? lastOf.get(row.id) ?? row.createdAt})),
+			task.id,
+		);
+		// Where more tasks started before it than were read, the task is its own run.
+		const tasks = ids.length === 0 ? [task] : around.filter((row) => ids.includes(row.id));
+		const rows = $(
+			await listTaskEntries(
+				viewer,
+				tasks.map((row) => row.id),
+				MAX_RUN_ENTRIES,
+			),
+		);
 		return {
-			entries: rows.map(({createdAt, ...entry}) => ({...entry, at: createdAt.toISOString(), userName: nameOf(entry.userId)})),
+			now: now.toISOString(),
+			task: task.id,
+			agentId: task.agentId,
 			tasks: tasks.map(toActivityTask),
+			entries: $(await toEntries(viewer, rows)),
 		};
 	});
 }
 
-// The home page's lanes: at most this many tasks, and a window at most this far back.
+// The home page's timeline: at most this many tasks, a window at most this far back, and at most
+// this many requests made for the tasks.
 const MAX_TASKS = 200;
 const MAX_WINDOW_MS = 31 * 24 * 60 * 60 * 1000;
+const MAX_TIMELINE_ENTRIES = 2000;
 
-const lanesQuerySchema = z.object({from: z.iso.datetime({offset: true})});
+const timelineQuerySchema = z.object({from: z.iso.datetime({offset: true})});
 
-/** A task as the home page's lanes draw it: when it ran, and what was done for it. */
-export type LaneTaskResponse = ActivityTaskResponse & {
-	// How many requests were made for it, and how many of them were refused.
-	requests: number;
-	denied: number;
-	// The connections its requests used, the most used first, the earlier used first among equals.
-	connectionIds: string[];
-};
-
-export type ActivityLanesResponse = {
-	// When the answer was made: the right edge of the lanes.
+export type ActivityTimelineResponse = {
+	// When the answer was made: the right edge of the timeline.
 	now: string;
 	from: string;
 	// Every task under way at some point since `from`, newest first.
-	tasks: LaneTaskResponse[];
+	tasks: ActivityTaskResponse[];
+	// Every request made for them, in the order they were made.
+	entries: AuditEntryResponse[];
 };
 
-/** The tasks the person sees under way at some point since `?from=`, shared agents' and their own agents', with what was done for each. */
-export function handleActivityLanesRoute(request: AuthenticatedRequest): Promise<Result<ActivityLanesResponse, ApiError>> {
+/** The tasks the person sees under way at some point since `?from=`, shared agents' and their own agents', with every request made for them. */
+export function handleActivityTimelineRoute(request: AuthenticatedRequest): Promise<Result<ActivityTimelineResponse, ApiError>> {
 	return Do(async ($) => {
-		const query = $(parseSchema(lanesQuerySchema, request.query));
+		const query = $(parseSchema(timelineQuerySchema, request.query));
 		const viewer = $(await requireViewer(request));
 		const now = new Date();
 		const from = new Date(Math.max(new Date(query.from).getTime(), now.getTime() - MAX_WINDOW_MS));
-		const rows = $(await listAgentTasksSince(viewer, from, MAX_TASKS));
-		const requests = $(
-			await summarizeTaskRequests(
+		const tasks = $(await listAgentTasksSince(viewer, from, MAX_TASKS));
+		const rows = $(
+			await listTaskEntries(
 				viewer,
-				rows.map((row) => row.id),
+				tasks.map((task) => task.id),
+				MAX_TIMELINE_ENTRIES,
 			),
 		);
-		const tasks = rows.map((task) => {
-			const own = requests.filter((row) => row.taskId === task.id);
-			const used = new Map<string, {count: number; first: Date}>();
-			for (const row of own) {
-				const known = used.get(row.connectionId) ?? {count: 0, first: row.first};
-				used.set(row.connectionId, {count: known.count + row.count, first: row.first < known.first ? row.first : known.first});
-			}
-			return {
-				...toActivityTask(task),
-				requests: own.reduce((total, row) => total + row.count, 0),
-				denied: own.filter((row) => row.outcome === 'denied').reduce((total, row) => total + row.count, 0),
-				connectionIds: [...used.entries()].sort((a, b) => b[1].count - a[1].count || a[1].first.getTime() - b[1].first.getTime()).map(([connectionId]) => connectionId),
-			};
-		});
-		return {now: now.toISOString(), from: from.toISOString(), tasks};
+		return {now: now.toISOString(), from: from.toISOString(), tasks: tasks.map(toActivityTask), entries: $(await toEntries(viewer, rows))};
 	});
 }
