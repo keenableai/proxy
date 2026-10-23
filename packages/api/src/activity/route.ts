@@ -2,14 +2,13 @@ import {Err, type Result} from 'ts-results-es';
 import {z} from 'zod';
 
 import {ApiErr, type ApiError, Do, parseSchema} from '@proxy/utils';
-import {type AuditEntryRow, listAuditEntries, listLastTaskRequests, listTaskEntries} from '@proxy/db/audit';
+import {type AuditEntryRow, listAuditEntries, listTaskEntries} from '@proxy/db/audit';
 import {listMemberNames} from '@proxy/db/organization';
-import {type AgentTaskRow, listAgentTasks, listAgentTasksBetween, listAgentTasksSince} from '@proxy/db/task';
+import {type AgentTaskRow, listAgentTasks, listAgentTasksSince, listSubTasks} from '@proxy/db/task';
 import type {Viewer} from '@proxy/db/viewer';
 
 import type {AuthenticatedRequest} from '../server/middleware/require-auth';
 import {requireViewer} from '../utils/user-org';
-import {runAround} from './runs';
 
 const MAX_ENTRIES = 500;
 
@@ -106,26 +105,27 @@ function toEntries(viewer: Viewer, rows: AuditEntryRow[]): Promise<Result<AuditE
 	});
 }
 
-// A task's page: the agent's tasks started this far either side of the task, to find its run
-// among, at most this many of them, and at most this many requests made for the run's tasks.
-const RUN_REACH_MS = 24 * 60 * 60 * 1000;
-const MAX_RUN_TASKS = 500;
+// A task's page: at most this many sub-tasks under the task, and at most this many requests made
+// for it and them.
+const MAX_SUB_TASKS = 500;
 const MAX_RUN_ENTRIES = 2000;
 
 export type TaskRunResponse = {
 	// When the answer was made: where a task still under way has got to.
 	now: string;
-	// The task the page is about, among `tasks`.
+	// The task the page is about, first among `tasks`.
 	task: string;
-	// The agent whose run it is.
+	// The agent whose task it is.
 	agentId: string;
-	// Every task of the run the task is in (runs.ts), in the order started: what the agent did in one go.
+	// The task it is a sub-task of, where it is one the person sees; null for a task started on its own.
+	parent: ActivityTaskResponse | null;
+	// The task and every task handed on from it, at any depth, in the order started: how it ran.
 	tasks: ActivityTaskResponse[];
 	// Every request made for them, in the order they were made.
 	entries: AuditEntryResponse[];
 };
 
-/** `GET /activity/tasks/:taskId`: a task the person sees, the run of its agent's tasks it is in, and every request made for them. */
+/** `GET /activity/tasks/:taskId`: a task the person sees, its sub-tasks at every depth, and every request made for them. */
 export function handleTaskRunRoute(request: AuthenticatedRequest): Promise<Result<TaskRunResponse, ApiError>> {
 	return Do(async ($) => {
 		const taskId = request.params.taskId ?? '';
@@ -135,21 +135,8 @@ export function handleTaskRunRoute(request: AuthenticatedRequest): Promise<Resul
 		if (task === undefined) {
 			return $(Err(ApiErr.notFound('task', taskId)));
 		}
-		const started = task.createdAt.getTime();
-		const around = $(await listAgentTasksBetween(viewer, task.agentId, new Date(started - RUN_REACH_MS), new Date(started + RUN_REACH_MS), MAX_RUN_TASKS));
-		const lastRequests = $(
-			await listLastTaskRequests(
-				viewer,
-				around.map((row) => row.id),
-			),
-		);
-		const lastOf = new Map(lastRequests.map((row) => [row.taskId, row.at]));
-		const ids = runAround(
-			around.map((row) => ({id: row.id, startedAt: row.createdAt, activeUntil: row.finishedAt ?? lastOf.get(row.id) ?? row.createdAt})),
-			task.id,
-		);
-		// Where more tasks started before it than were read, the task is its own run.
-		const tasks = ids.length === 0 ? [task] : around.filter((row) => ids.includes(row.id));
+		const [parent] = task.parentId === null ? [] : $(await listAgentTasks(viewer, [task.parentId]));
+		const tasks = [task, ...$(await listSubTasks(viewer, task.id, MAX_SUB_TASKS))];
 		const rows = $(
 			await listTaskEntries(
 				viewer,
@@ -161,6 +148,7 @@ export function handleTaskRunRoute(request: AuthenticatedRequest): Promise<Resul
 			now: now.toISOString(),
 			task: task.id,
 			agentId: task.agentId,
+			parent: parent === undefined ? null : toActivityTask(parent),
 			tasks: tasks.map(toActivityTask),
 			entries: $(await toEntries(viewer, rows)),
 		};

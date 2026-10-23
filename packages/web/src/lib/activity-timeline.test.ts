@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
-import {buildActivityTimeline, laneAssignments} from './activity-timeline';
+import {buildActivityTimeline, laneAssignments, lanesEverywhere} from './activity-timeline';
 
 const now = new Date('2026-10-16T12:00:00Z');
 const WIDTH = 600;
@@ -119,6 +119,96 @@ describe('buildActivityTimeline', () => {
 		const bars = timeline.rows.flatMap((row) => row.lanes.flat());
 		expect(bars.map((bar) => [bar.tasks[0]?.id, bar.start, bar.end, bar.clippedStart])).toEqual([
 			['straddling', 0, 100, true],
+		]);
+	});
+
+	test('a task given up on ends at its last request, not a day after it started', () => {
+		const stale = task({id: 'stale', startedAt: '2026-10-15T09:00:00Z'});
+		const timeline = buildActivityTimeline(
+			[stale],
+			[entry({id: 'late', taskId: 'stale', at: '2026-10-16T07:00:00Z', durationMs: 0})],
+			now,
+			window,
+			WIDTH,
+		);
+		const bar = timeline.rows[0]?.lanes[0]?.[0];
+		expect(bar?.status).toBe('abandoned');
+		expect(bar?.members).toEqual([{start: 0, end: 100}]);
+	});
+
+	test('names every task’s lane under its own key and a cluster’s starting with it', () => {
+		const burst = ['a', 'b'].map((id, index) =>
+			task({
+				id,
+				startedAt: new Date(Date.parse('2026-10-16T09:00:00Z') + index * 1000).toISOString(),
+				finishedAt: new Date(Date.parse('2026-10-16T09:00:10Z') + index * 1000).toISOString(),
+			}),
+		);
+		const long = task({
+			id: 'long',
+			startedAt: '2026-10-16T08:59:00Z',
+			finishedAt: '2026-10-16T09:30:00Z',
+		});
+		const timeline = buildActivityTimeline([long, ...burst], [], now, window, WIDTH);
+		expect(laneAssignments(timeline)).toEqual(
+			new Map([
+				['long', 0],
+				['cluster:a', 1],
+			]),
+		);
+		expect(lanesEverywhere(timeline)).toEqual(
+			new Map([
+				['long', 0],
+				['cluster:long', 0],
+				['a', 1],
+				['cluster:a', 1],
+				['b', 1],
+				['cluster:b', 1],
+			]),
+		);
+	});
+
+	test('held to their lanes, overlapping bars share one rather than opening another', () => {
+		const first = task({
+			id: 'first',
+			startedAt: '2026-10-16T10:00:00Z',
+			finishedAt: '2026-10-16T11:30:00Z',
+		});
+		const second = task({
+			id: 'second',
+			startedAt: '2026-10-16T11:00:00Z',
+			finishedAt: '2026-10-16T12:00:00Z',
+		});
+		const preferred = new Map([
+			['first', 0],
+			['second', 0],
+		]);
+		const apart = buildActivityTimeline([first, second], [], now, window, WIDTH, preferred);
+		expect(apart.rows[0]?.lanes.map((lane) => lane.map((bar) => bar.tasks[0]?.id))).toEqual([
+			['first'],
+			['second'],
+		]);
+		const held = buildActivityTimeline([first, second], [], now, window, WIDTH, preferred, true);
+		expect(held.rows[0]?.lanes.map((lane) => lane.map((bar) => bar.tasks[0]?.id))).toEqual([
+			['first', 'second'],
+		]);
+		// One with no lane to keep joins the last lane rather than opening one.
+		const third = task({
+			id: 'third',
+			startedAt: '2026-10-16T10:30:00Z',
+			finishedAt: '2026-10-16T11:45:00Z',
+		});
+		const crowded = buildActivityTimeline(
+			[first, second, third],
+			[],
+			now,
+			window,
+			WIDTH,
+			preferred,
+			true,
+		);
+		expect(crowded.rows[0]?.lanes.map((lane) => lane.map((bar) => bar.tasks[0]?.id))).toEqual([
+			['first', 'third', 'second'],
 		]);
 	});
 

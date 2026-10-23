@@ -15,17 +15,10 @@ export type Span = {start: number; end: number};
 // A request, where it ran: from when it came in to when it was done, on the task it was made for.
 export type TimelineRequest = Span & {entry: AuditEntry};
 
-// The agents' colors, as classes setting the text color, which the charts' shapes take as
-// currentColor: the reference palette's blue, magenta, green, violet and aqua, in an order whose
-// neighbors stay apart for color-blind eyes, each stepped for the dark theme. Its orange, yellow
+// The color tasks are drawn in, as a class setting the text color, which the charts' shapes take
+// as currentColor: the reference palette's blue, stepped for the dark theme. Its orange, yellow
 // and red are left out, as amber and red mean a request was blocked or failed.
-export const AGENT_COLOR_CLASSES = [
-	'text-[#2a78d6] dark:text-[#3987e5]',
-	'text-[#d55181] dark:text-[#e87ba4]',
-	'text-[#008300] dark:text-[#2ea043]',
-	'text-[#6250d6] dark:text-[#9085e9]',
-	'text-[#1a9d6e] dark:text-[#2cb784]',
-] as const;
+export const TASK_COLOR_CLASS = 'text-[#2a78d6] dark:text-[#3987e5]';
 
 // How faint a task's track is, and one given up.
 export const TRACK_OPACITY = 0.2;
@@ -33,19 +26,6 @@ export const ABANDONED_OPACITY = 0.1;
 
 // A track is drawn at least this wide, so a task done in a moment still reads as one.
 export const MIN_TRACK_PX = 6;
-
-// How many colors agents are drawn in (AGENT_COLOR_CLASSES). An agent keeps its color wherever it
-// appears, so the same agent is the same color on every visit.
-const AGENT_COLORS = AGENT_COLOR_CLASSES.length;
-
-/** One of the agent colors for an id: the same every time, spread evenly over the ids. */
-export function colorOf(id: string): number {
-	let hash = 0;
-	for (const char of id) {
-		hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-	}
-	return hash % AGENT_COLORS;
-}
 
 /** "850ms", "1.2s", "5s", "12s", "2m 5s", "1h 4m", "2d 3h": how long something took, as short as it reads. */
 export function formatDuration(ms: number): string {

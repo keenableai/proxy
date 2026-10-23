@@ -149,28 +149,3 @@ export async function listTaskEntries(
 		}),
 	);
 }
-
-/** When the last request the viewer sees was made for each of `taskIds`; a task with none is left out. */
-export async function listLastTaskRequests(
-	viewer: Viewer,
-	taskIds: string[],
-): Promise<Result<Array<{taskId: string; at: Date}>, ApiError>> {
-	if (taskIds.length === 0) {
-		return wrapDb(async () => []);
-	}
-	const grouped = await wrapDb(() =>
-		db.auditEntry.groupBy({
-			by: ['taskId'],
-			where: {...visibleTo(viewer), taskId: {in: taskIds}},
-			_max: {createdAt: true},
-		}),
-	);
-	return grouped.map((rows) =>
-		rows.flatMap((row) => {
-			if (row.taskId === null || row._max.createdAt === null) {
-				return [];
-			}
-			return [{taskId: row.taskId, at: row._max.createdAt}];
-		}),
-	);
-}

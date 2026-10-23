@@ -4,6 +4,7 @@ import {getActivityTimeline} from '@/client/agents-client';
 import type {ActivityTimeline as ActivityAnswer} from '@/client/schemas';
 import {AuditEntryDialog} from '@/components/audit-entry-dialog';
 import {ActivityTimeline} from '@/components/activity-timeline';
+import type {Window} from '@/lib/activity-timeline';
 import {useOrgSlug} from '@/hooks/use-org';
 import {
 	DEFAULT_MINUTES,
@@ -17,6 +18,7 @@ import {
 	windowStart,
 	zoomed,
 } from '@/lib/timeline-window';
+import {zoomPath} from '@/lib/zoom-path';
 import type {AgentLogin, AuditEntry, Connection} from '@/lib/types';
 import {Button} from '@proxy/ui/components/button';
 import {cn} from '@proxy/ui/lib/utils';
@@ -41,8 +43,14 @@ const LABELS_PX = 240;
 
 const CUSTOM = 'custom';
 
-// How long zooming in on a bar of several tasks takes.
-const ZOOM_MS = 450;
+// How long zooming in on a bar of several tasks takes: as long as a row takes to grow or shrink
+// (activity-timeline.tsx), so the rows making room for what the zoom brings move with it.
+const ZOOM_MS = 300;
+
+// How many windows along the way of a zoom the chart is shown ahead of time, so its rows make room
+// for every one of them as the zoom sets off.
+const AHEAD_STEPS = 12;
+const NO_WINDOWS: Window[] = [];
 
 function easeInOut(progress: number): number {
 	return progress < 0.5 ? 2 * progress * progress : 1 - (-2 * progress + 2) ** 2 / 2;
@@ -128,6 +136,12 @@ export function AgentTimeline({
 		};
 	}, [org, minutes, end]);
 
+	// A zoom under way on a bar of several tasks (zoomTo), to stop for the wheel or on leaving; and
+	// the windows it will pass through, for the chart to make room for.
+	const zooming = useRef<number | null>(null);
+	const [ahead, setAhead] = useState<Window[]>(NO_WINDOWS);
+	useEffect(() => () => cancelZoom(zooming), []);
+
 	// The wheel with Ctrl or Cmd held, which a pinch on a trackpad also sends, zooms rather than
 	// scrolls the page, and sideways, or with Shift, scrolls the timeline through time, as far as the
 	// pointer moved; listened to by hand, since React's wheel listener can't stop the scroll. Up and
@@ -135,6 +149,8 @@ export function AgentTimeline({
 	// there is nothing to show.
 	const listenForZoom = useCallback((element: HTMLDivElement) => {
 		const onWheel = (event: WheelEvent) => {
+			cancelZoom(zooming);
+			setAhead(NO_WINDOWS);
 			if (event.ctrlKey || event.metaKey) {
 				event.preventDefault();
 				// The moment under the pointer stays where it is, the window growing or shrinking
@@ -177,56 +193,54 @@ export function AgentTimeline({
 	}, []);
 
 	// The window zoomed in on a stretch of time: a little longer than it, centred on it, ending at
-	// now where the stretch runs up to it. It gets there over a moment rather than at once: the
-	// stretch's middle glides from where it is on the chart to the chart's middle while the
-	// window's length changes by even factors, one motion, rather than the view sliding off and
-	// back as it would were the window's own middle moved; at once for those who would rather
-	// not see motion.
-	const zooming = useRef<number | null>(null);
-	useEffect(() => () => cancelZoom(zooming), []);
+	// now where the stretch runs up to it. It gets there over a moment rather than at once, along
+	// the path maps fly along (lib/zoom-path.ts), pan and zoom as one motion at one even pace; the
+	// window is whatever length the path gives it on the way, whole minutes again once there. The
+	// chart is told the windows along the way as the zoom sets off, so its rows make room for all
+	// of them at once, moving with the zoom rather than as each comes. At once for those who would
+	// rather not see motion.
 	const zoomTo = (from: number, to: number) => {
 		const now = Date.now();
-		const length = Math.max(to - from, MIN_MINUTES * MINUTE_MS);
-		const padded = Math.min(
-			Math.max(length * 1.25, MIN_MINUTES * MINUTE_MS),
-			MAX_MINUTES * MINUTE_MS,
-		);
-		const targetMinutes = Math.round(padded / MINUTE_MS);
+		const least = MIN_MINUTES * MINUTE_MS;
+		const most = MAX_MINUTES * MINUTE_MS;
+		const padded = Math.min(Math.max(Math.max(to - from, least) * 1.25, least), most);
 		const middle = (from + to) / 2;
-		// Where the stretch's middle sits on the chart, as a fraction of the window: now, and at
-		// the end, the middle but for a window kept from reaching past now.
-		const startMinutes = minutes;
-		const startEnd = end ?? now;
-		const startAt = (middle - (startEnd - startMinutes * MINUTE_MS)) / (startMinutes * MINUTE_MS);
+		const startWidth = minutes * MINUTE_MS;
+		const startEnd = Math.min(end ?? now, now);
 		const targetEnd = Math.min(middle + padded / 2, now);
-		const targetAt = (middle - (targetEnd - padded)) / padded;
-		const place = (lengthMs: number, at: number) => {
-			const endAt = middle + (1 - at) * lengthMs;
-			setEnd(endAt >= now - MINUTE_MS ? null : endAt);
+		const path = zoomPath(
+			{center: startEnd - startWidth / 2, width: startWidth},
+			{center: targetEnd - padded / 2, width: padded},
+		);
+		const windowAt = (t: number): Window => {
+			const view = path(t);
+			const width = Math.min(Math.max(view.width, least), most);
+			const to = Math.min(view.center + width / 2, now);
+			return {from: new Date(to - width), to: new Date(to)};
+		};
+		const show = (t: number, there: boolean) => {
+			const view = path(t);
+			const width = Math.min(Math.max(view.width, least), most);
+			const endAt = view.center + width / 2;
+			setMinutes(there ? Math.round(width / MINUTE_MS) : width / MINUTE_MS);
+			setEnd(endAt >= now ? null : endAt);
 		};
 		cancelZoom(zooming);
 		if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-			setMinutes(targetMinutes);
-			place(padded, targetAt);
+			show(1, true);
 			return;
 		}
+		setAhead(Array.from({length: AHEAD_STEPS + 1}, (_, index) => windowAt(index / AHEAD_STEPS)));
 		const began = performance.now();
 		const step = (time: number) => {
 			const progress = Math.min((time - began) / ZOOM_MS, 1);
 			if (progress >= 1) {
 				zooming.current = null;
-				setMinutes(targetMinutes);
-				place(padded, targetAt);
+				setAhead(NO_WINDOWS);
+				show(1, true);
 				return;
 			}
-			const eased = easeInOut(progress);
-			const stepMinutes = Math.round(
-				Math.exp(
-					Math.log(startMinutes) + (Math.log(targetMinutes) - Math.log(startMinutes)) * eased,
-				),
-			);
-			setMinutes(stepMinutes);
-			place(stepMinutes * MINUTE_MS, startAt + (targetAt - startAt) * eased);
+			show(easeInOut(progress), false);
 			zooming.current = requestAnimationFrame(step);
 		};
 		zooming.current = requestAnimationFrame(step);
@@ -254,8 +268,10 @@ export function AgentTimeline({
 		}, ZOOM_SETTLE_MS);
 		return () => clearTimeout(timer);
 	}, [minutes, end, setParams]);
+	// The window's length as read: whole minutes, which it is but for a moment while zooming in.
+	const wholeMinutes = Math.round(minutes);
 	// Where a task's page comes back to: this page, with the window as it is now.
-	const backTo = `${location.pathname}${windowSearch(minutes, end)}`;
+	const backTo = `${location.pathname}${windowSearch(wholeMinutes, end)}`;
 
 	// Scrolled or zoomed to where there is nothing, the timeline stays up, its rows going the way
 	// they do, and only says so once the window has rested a second.
@@ -270,9 +286,16 @@ export function AgentTimeline({
 	const to = end === null ? now : new Date(Math.min(end, now.getTime()));
 	const window = {from: windowStart(minutes, to), to};
 	const inWindow = answer.tasks.some(
-		(task) => (endedAt(task, now) ?? now).getTime() >= window.from.getTime(),
+		(task) =>
+			(
+				endedAt(
+					task,
+					answer.entries.filter((entry) => entry.taskId === task.id),
+					now,
+				) ?? now
+			).getTime() >= window.from.getTime(),
 	);
-	const preset = presetOf(minutes);
+	const preset = presetOf(wholeMinutes);
 
 	return (
 		<section aria-label="Agents" className="flex w-full max-w-3xl flex-col items-end gap-2 text-sm">
@@ -300,7 +323,7 @@ export function AgentTimeline({
 							value: choice.id,
 							label: windowLabel(choice.minutes, end === null),
 						})),
-						{value: CUSTOM, label: windowLabel(minutes, end === null)},
+						{value: CUSTOM, label: windowLabel(wholeMinutes, end === null)},
 					]}
 					onValueChange={(next) => {
 						const chosen = WINDOWS.find((choice) => choice.id === next);
@@ -333,13 +356,14 @@ export function AgentTimeline({
 						connections={connections}
 						onOpenEntry={setOpened}
 						onZoom={zoomTo}
+						ahead={ahead}
 						backTo={backTo}
 					/>
 				)}
 				{!inWindow && resting && (
 					<p className="rounded-lg border px-4 py-3 text-center text-muted-foreground">
 						{end === null
-							? `No tasks in the ${windowLabel(minutes).toLowerCase()}.`
+							? `No tasks in the ${windowLabel(wholeMinutes).toLowerCase()}.`
 							: 'No tasks in this stretch of time.'}
 					</p>
 				)}

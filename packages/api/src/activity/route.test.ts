@@ -1,9 +1,10 @@
 import {afterEach, beforeEach, describe, expect, mock, setSystemTime, test} from 'bun:test';
 import {Ok} from 'ts-results-es';
 
+import type {Viewer} from '@proxy/db/viewer';
+
 const listAuditEntries = mock();
 const listTaskEntries = mock();
-const listLastTaskRequests = mock();
 
 const listMemberNames = mock(async (): Promise<unknown> => Ok([]));
 
@@ -12,13 +13,13 @@ mock.module('@proxy/db/organization', () => ({getMembership: mock(async () => Ok
 const requireViewer = mock(async () => Ok({orgId: 'org-1', userId: 'user-1', slug: 'org-1', name: 'Workspace', role: 'owner', onboarded: true, experiments: []}));
 
 mock.module('../utils/user-org', () => ({requireViewer, requireOwner: requireViewer}));
-mock.module('@proxy/db/audit', () => ({listAuditEntries, listLastTaskRequests, listTaskEntries}));
+mock.module('@proxy/db/audit', () => ({listAuditEntries, listTaskEntries}));
 
 const listAgentTasks = mock();
 const listAgentTasksSince = mock();
-const listAgentTasksBetween = mock();
+const listSubTasks = mock();
 
-mock.module('@proxy/db/task', () => ({listAgentTasks, listAgentTasksBetween, listAgentTasksSince}));
+mock.module('@proxy/db/task', () => ({listAgentTasks, listAgentTasksSince, listSubTasks}));
 
 function makeRequest(query: Record<string, string>) {
 	return {user: {userId: 'user-1', email: 'test@example.com', name: 'Test User'}, query};
@@ -225,11 +226,11 @@ describe('handleTaskRunRoute', () => {
 		finishedAt: finish === null ? null : new Date(finish),
 		outcome: null,
 	});
-	// Calendar, then notes a minute after it ends and a sub-task of notes; then, an hour later, mail.
-	const calendar = task('calendar', '2026-10-15T20:00:00Z', '2026-10-15T20:10:00Z');
+	// Notes, with a sub-task and one under that; calendar, handed on from a task the person does not see.
 	const notes = task('notes', '2026-10-15T20:11:00Z', null);
 	const sub = task('sub', '2026-10-15T20:12:00Z', '2026-10-15T20:13:00Z', 'notes');
-	const mail = task('mail', '2026-10-15T21:30:00Z', '2026-10-15T21:31:00Z');
+	const deeper = task('deeper', '2026-10-15T20:12:30Z', '2026-10-15T20:13:00Z', 'sub');
+	const calendar = task('calendar', '2026-10-15T20:00:00Z', '2026-10-15T20:10:00Z', 'hidden');
 	const entry = {
 		id: 'entry-1',
 		agentId: 'agent-1',
@@ -252,38 +253,50 @@ describe('handleTaskRunRoute', () => {
 	}
 
 	beforeEach(() => {
-		listAgentTasksBetween.mockResolvedValue(Ok([calendar, notes, sub, mail]));
-		// Notes is still open: its last request, not now, is when it was last at work.
-		listLastTaskRequests.mockResolvedValue(Ok([{taskId: 'notes', at: new Date('2026-10-15T20:20:00Z')}]));
+		listSubTasks.mockResolvedValue(Ok([]));
 		listTaskEntries.mockResolvedValue(Ok([entry]));
 	});
 
-	test('answers the run the task is in, the agent’s tasks a day either side of it, with every request made for them', async () => {
-		listAgentTasks.mockResolvedValue(Ok([sub]));
+	test('answers the task, the tasks handed on from it at any depth, and every request made for them', async () => {
+		listAgentTasks.mockResolvedValue(Ok([notes]));
+		listSubTasks.mockResolvedValue(Ok([sub, deeper]));
 		const {handleTaskRunRoute} = await import('./route');
-		const result = await handleTaskRunRoute(makeRunRequest('sub') as never);
+		const result = await handleTaskRunRoute(makeRunRequest('notes') as never);
 
 		const viewer = expect.objectContaining({orgId: 'org-1', userId: 'user-1'});
-		expect(listAgentTasks).toHaveBeenCalledWith(viewer, ['sub']);
-		expect(listAgentTasksBetween).toHaveBeenCalledWith(viewer, 'agent-1', new Date('2026-10-14T20:12:00Z'), new Date('2026-10-16T20:12:00Z'), 500);
-		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['calendar', 'notes', 'sub'], 2000);
+		expect(listAgentTasks).toHaveBeenCalledTimes(1);
+		expect(listAgentTasks).toHaveBeenCalledWith(viewer, ['notes']);
+		expect(listSubTasks).toHaveBeenCalledWith(viewer, 'notes', 500);
+		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['notes', 'sub', 'deeper'], 2000);
 		const run = result.unwrap();
-		expect(run).toMatchObject({now: '2026-10-15T23:30:00.000Z', task: 'sub', agentId: 'agent-1'});
+		expect(run).toMatchObject({now: '2026-10-15T23:30:00.000Z', task: 'notes', agentId: 'agent-1', parent: null});
 		expect(run.tasks.map((row) => [row.id, row.parentId])).toEqual([
-			['calendar', null],
 			['notes', null],
 			['sub', 'notes'],
+			['deeper', 'sub'],
 		]);
 		const {createdAt, ...fields} = entry;
 		expect(run.entries).toEqual([{...fields, at: createdAt.toISOString(), userName: null}]);
 	});
 
-	test('a task an hour after the others is a run of its own', async () => {
-		listAgentTasks.mockResolvedValue(Ok([mail]));
+	test('a sub-task’s page names the task it was handed on from, and shows only what is under it', async () => {
+		listAgentTasks.mockImplementation(async (_viewer: Viewer, ids: string[]) => Ok([notes, sub].filter((row) => ids.includes(row.id))));
+		listSubTasks.mockResolvedValue(Ok([deeper]));
 		const {handleTaskRunRoute} = await import('./route');
-		const result = await handleTaskRunRoute(makeRunRequest('mail') as never);
+		const result = await handleTaskRunRoute(makeRunRequest('sub') as never);
 
-		expect(result.unwrap().tasks.map((row) => row.id)).toEqual(['mail']);
+		const run = result.unwrap();
+		expect(run.parent).toMatchObject({id: 'notes', title: 'Task notes'});
+		expect(run.tasks.map((row) => row.id)).toEqual(['sub', 'deeper']);
+	});
+
+	test('a parent the person does not see is left out', async () => {
+		listAgentTasks.mockImplementation(async (_viewer: Viewer, ids: string[]) => Ok([calendar].filter((row) => ids.includes(row.id))));
+		const {handleTaskRunRoute} = await import('./route');
+		const result = await handleTaskRunRoute(makeRunRequest('calendar') as never);
+
+		expect(result.unwrap()).toMatchObject({task: 'calendar', parent: null});
+		expect(result.unwrap().tasks.map((row) => row.id)).toEqual(['calendar']);
 	});
 
 	test('a task the person does not see is not found', async () => {

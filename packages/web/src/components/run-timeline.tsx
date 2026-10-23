@@ -3,23 +3,20 @@ import {Fragment, useId, useState} from 'react';
 import {Link, useLocation} from 'react-router';
 import {
 	AxisLabels,
+	ChartLegend,
 	HatchDefs,
-	Key,
-	Legend,
-	Marker,
 	Pulse,
 	RequestMarks,
 	RequestTargets,
 	TaskNames,
 	TaskTooltip,
 	Track,
-	TrackSwatch,
 } from '@/components/timeline-chart';
 import {useChartWidth} from '@/hooks/use-chart-width';
 import {useOrgSlug} from '@/hooks/use-org';
+import {backFrom} from '@/lib/back';
 import {formatTime} from '@/lib/format';
 import {
-	BREAK_PX,
 	buildRunTimeline,
 	defaultExpanded,
 	type RunBreak,
@@ -27,13 +24,12 @@ import {
 	type RunTimeline as RunLayout,
 } from '@/lib/run-timeline';
 import {
-	AGENT_COLOR_CLASSES,
 	ABANDONED_OPACITY,
-	colorOf,
 	formatDuration,
 	MIN_TRACK_PX,
 	requestSummary,
 	roughDuration,
+	TASK_COLOR_CLASS,
 } from '@/lib/timeline';
 import {STATUS_LABEL} from '@/lib/timeline-window';
 import type {ActivityTask, AuditEntry, Connection} from '@/lib/types';
@@ -55,37 +51,25 @@ type Props = {
 	entries: AuditEntry[];
 	// When the answer was read: where a task under way has got to.
 	now: string;
-	agentId: string;
 	// The task the page is about, which stands out.
-	focus: string;
 	connections: Connection[];
 	onOpenEntry: (entry: AuditEntry) => void;
 };
 
-// A run, what an agent did in one go (the layout in lib/run-timeline.ts): every task in a row
-// under the task it was handed from, along one axis from when the first started to the last thing
-// done, its idle stretches folded away. A track runs as long as its task did, the requests made
+// A task's run (the layout in lib/run-timeline.ts): the task in the top row and every task handed
+// on from it in a row under the task it was handed from, along one axis from when the task
+// started to the last thing done, its idle stretches folded away. A track runs as long as its task did, the requests made
 // for it solid on it, hatched where it waited on what it handed on; a line goes down from a task
 // where it handed one on and back up where that one was finished, standing out for the row under
 // the pointer. A task's sub-tasks are laid out under it or rolled into it by its chevron, and
 // short tasks one after another sit in one row until theirs is opened. Every mark says more on
-// hover; a request opens in full, a task's name opens its page.
-export function RunTimeline({
-	tasks,
-	entries,
-	now,
-	agentId,
-	focus,
-	connections,
-	onOpenEntry,
-}: Props) {
-	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() =>
-		defaultExpanded(tasks, focus),
-	);
+// hover; a request opens in full, a sub-task's name opens its page.
+export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Props) {
+	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => defaultExpanded(tasks));
 	const [active, setActive] = useState<string | null>(null);
 	const [measure, width] = useChartWidth();
 	const hatch = useId();
-	const timeline = buildRunTimeline(tasks, entries, new Date(now), width, {expanded, focus});
+	const timeline = buildRunTimeline(tasks, entries, new Date(now), width, {expanded});
 	const titleOf = (taskId: string | null) =>
 		tasks.find((candidate) => candidate.id === taskId)?.title ?? null;
 	const toggle = (row: RunRow) =>
@@ -110,13 +94,11 @@ export function RunTimeline({
 	const isOpen = (row: RunRow, index: number) =>
 		row.kind === 'task' && timeline.rows.some((candidate) => candidate.parentRow === index);
 	const isActive = (row: RunRow) =>
-		row.id === active ||
-		row.id === focus ||
-		(row.parentRow !== null && timeline.rows[row.parentRow]?.id === active);
+		row.id === active || (row.parentRow !== null && timeline.rows[row.parentRow]?.id === active);
 	const height = Math.max(timeline.rows.length, 1) * ROW_H;
 
 	return (
-		<div className="flex flex-col gap-3 text-sm">
+		<div className="flex flex-col gap-2 text-sm">
 			<div className="flex overflow-hidden rounded-lg border">
 				<div className={cn(LABEL, 'min-w-0 border-r bg-muted/40')}>
 					{timeline.rows.map((row, index) => (
@@ -124,7 +106,6 @@ export function RunTimeline({
 							key={row.id}
 							row={row}
 							open={isOpen(row, index)}
-							focused={row.id === focus}
 							active={isActive(row)}
 							onToggle={() => toggle(row)}
 							onHover={(over) => setActive(over ? row.id : null)}
@@ -168,7 +149,7 @@ export function RunTimeline({
 							{timeline.rows.map((row, index) => (
 								<g
 									key={row.id}
-									className={AGENT_COLOR_CLASSES[colorOf(agentId)]}
+									className={TASK_COLOR_CLASS}
 									transform={`translate(0 ${index * ROW_H})`}
 								>
 									{isActive(row) && (
@@ -257,31 +238,7 @@ export function RunTimeline({
 					</AxisLabels>
 				</div>
 			</div>
-			<Legend>
-				<Key swatch={<TrackSwatch />}>Task</Key>
-				<Key swatch={<TrackSwatch requests />}>Requests</Key>
-				<Key swatch={<TrackSwatch hatched />}>Waiting on sub-tasks</Key>
-				<Key swatch={<TrackSwatch running />}>Under way</Key>
-				<Key swatch={<TrackSwatch abandoned />}>Given up</Key>
-				<Key swatch={<span className="size-2 rounded-full bg-foreground/60" />}>Handed on</Key>
-				<Key swatch={<span className="size-2 rounded-full border-[1.5px] border-foreground/60" />}>
-					Handed back
-				</Key>
-				{timeline.breaks.length > 0 && (
-					<Key
-						swatch={
-							<span
-								className="h-2.5 rounded-sm bg-muted-foreground/15"
-								style={{width: BREAK_PX / 2}}
-							/>
-						}
-					>
-						Idle
-					</Key>
-				)}
-				<Key swatch={<Marker blocked className="relative" />}>Blocked</Key>
-				<Key swatch={<Marker blocked={false} className="relative" />}>Failed</Key>
-			</Legend>
+			<ChartLegend rows={timeline.rows} />
 		</div>
 	);
 }
@@ -293,27 +250,27 @@ function rowsUnder(timeline: RunLayout, row: RunRow): RunRow[] {
 	return direct.flatMap((child) => [child, ...rowsUnder(timeline, child)]);
 }
 
-// A row's name: its task's, opening the task's page, indented under what it was handed from, with
-// how long it took; a group's, how many tasks it holds. Where a task handed any on, a chevron lays
+// A row's name: its task's, indented under what it was handed from, with how long it took, opening
+// the task's page for every task but the page's own, at the top; a group's, how many tasks it
+// holds. Where a task handed any on, a chevron lays
 // them out under it or rolls them back in; a group's lays its tasks out.
 function RowLabel({
 	row,
 	open,
-	focused,
 	active,
 	onToggle,
 	onHover,
 }: {
 	row: RunRow;
 	open: boolean;
-	focused: boolean;
 	active: boolean;
 	onToggle: () => void;
 	onHover: (over: boolean) => void;
 }) {
 	const org = useOrgSlug();
-	const {state} = useLocation();
+	const back = backFrom(useLocation());
 	const [task] = row.tasks;
+	const own = row.depth === 0;
 	const foldable = row.kind === 'group' || row.rolledIn > 0 || open;
 	const chevronLabel =
 		row.kind === 'group'
@@ -326,11 +283,7 @@ function RowLabel({
 	);
 	return (
 		<div
-			className={cn(
-				'flex items-center',
-				focused && 'bg-muted font-medium',
-				!focused && active && 'bg-muted/70',
-			)}
+			className={cn('flex items-center', own && 'font-medium', active && 'bg-muted/70')}
 			style={{height: ROW_H, paddingLeft: 8 + row.depth * 14}}
 			onMouseEnter={() => onHover(true)}
 			onMouseLeave={() => onHover(false)}
@@ -365,12 +318,17 @@ function RowLabel({
 					{aside}
 				</button>
 			)}
-			{row.kind === 'task' && task && (
+			{row.kind === 'task' && task && own && (
+				<span className="flex h-full min-w-0 flex-1 items-center pr-3 pl-1">
+					<span className="truncate">{task.title}</span>
+					{aside}
+				</span>
+			)}
+			{row.kind === 'task' && task && !own && (
 				<Link
 					to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
-					state={state}
+					state={back}
 					preventScrollReset
-					aria-current={focused ? 'page' : undefined}
 					className="flex h-full min-w-0 flex-1 items-center pr-3 pl-1 hover:text-foreground"
 				>
 					<span className="truncate">{task.title}</span>
@@ -381,8 +339,9 @@ function RowLabel({
 	);
 }
 
-// The target over a row's track: a task's opens its page and says on hover what it was for and
-// how it went; a group's lays its tasks out, and says on hover which they are.
+// The target over a row's track: a task's says on hover what it was for and how it went, and
+// opens its page, but for the page's own task at the top; a group's lays its tasks out, and says
+// on hover which they are.
 function RowTarget({
 	row,
 	top,
@@ -395,7 +354,7 @@ function RowTarget({
 	onHover: (over: boolean) => void;
 }) {
 	const org = useOrgSlug();
-	const {state} = useLocation();
+	const back = backFrom(useLocation());
 	const [task] = row.tasks;
 	const style = {
 		left: row.start,
@@ -437,20 +396,31 @@ function RowTarget({
 			</Tooltip>
 		);
 	}
+	const own = row.depth === 0;
 	return (
 		<Tooltip disableHoverablePopup>
 			<TooltipTrigger
 				render={
-					<Link
-						to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
-						state={state}
-						preventScrollReset
-						aria-label={task.title}
-						className={className}
-						style={style}
-						onMouseEnter={() => onHover(true)}
-						onMouseLeave={() => onHover(false)}
-					/>
+					own ? (
+						<span
+							aria-label={task.title}
+							className={className}
+							style={style}
+							onMouseEnter={() => onHover(true)}
+							onMouseLeave={() => onHover(false)}
+						/>
+					) : (
+						<Link
+							to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
+							state={back}
+							preventScrollReset
+							aria-label={task.title}
+							className={className}
+							style={style}
+							onMouseEnter={() => onHover(true)}
+							onMouseLeave={() => onHover(false)}
+						/>
+					)
 				}
 			/>
 			<TooltipContent className="pointer-events-none max-w-xs">
@@ -467,7 +437,7 @@ function RowTarget({
 }
 
 // Where a row's lines meet the track it was handed from: the dot where it was handed on, at the
-// bottom edge of that track, a little before the row's start, and the ring where it was handed
+// bottom edge of that track, a little before the row's start, and the dot where it was handed
 // back, a little after its end, each kept on the parent's track; the lines turn into the row's
 // track with corners of the radius each has room for.
 function handoffOf(timeline: RunLayout, index: number) {
@@ -495,8 +465,8 @@ function handoffOf(timeline: RunLayout, index: number) {
 
 // Where a task handed one on: a dot on the bottom edge of its track, and a line down that turns
 // into the start of the task's; where that task was finished by its agent, a line out of its end
-// that turns back up to a ring on the track it was handed from. Each line is faint until its row,
-// or the row it hangs from, is under the pointer.
+// that turns back up to a dot on the track it was handed from. Each line is faint until its row,
+// or the row it hangs from, is under the pointer; the dots are a solid gray throughout.
 function Handoffs({timeline, isActive}: {timeline: RunLayout; isActive: (row: RunRow) => boolean}) {
 	return (
 		<g className="pointer-events-none">
@@ -518,16 +488,7 @@ function Handoffs({timeline, isActive}: {timeline: RunLayout; isActive: (row: Ru
 							strokeWidth={1.5}
 							className={line}
 						/>
-						<circle
-							cx={xDown}
-							cy={from}
-							r={3.5}
-							strokeWidth={2}
-							className={cn(
-								'stroke-background',
-								active ? 'fill-foreground/80' : 'fill-foreground/60',
-							)}
-						/>
+						<Dot cx={xDown} cy={from} />
 						{row.handedBack && (
 							<>
 								<path
@@ -535,16 +496,7 @@ function Handoffs({timeline, isActive}: {timeline: RunLayout; isActive: (row: Ru
 									strokeWidth={1.5}
 									className={line}
 								/>
-								<circle
-									cx={xUp}
-									cy={from}
-									r={3}
-									strokeWidth={1.5}
-									className={cn(
-										'fill-background',
-										active ? 'stroke-foreground/80' : 'stroke-foreground/60',
-									)}
-								/>
+								<Dot cx={xUp} cy={from} />
 							</>
 						)}
 					</Fragment>
@@ -554,10 +506,23 @@ function Handoffs({timeline, isActive}: {timeline: RunLayout; isActive: (row: Ru
 	);
 }
 
-// How wide the target over a dot or ring is, so it is easy to point at.
+// A dot where a line meets the track above it: the gray of a line at rest, the foreground at a
+// quarter over the background, but opaque, so it looks the same without showing what is under it.
+function Dot({cx, cy}: {cx: number; cy: number}) {
+	return (
+		<circle
+			cx={cx}
+			cy={cy}
+			r={7 / 3}
+			className="fill-[color-mix(in_srgb,var(--foreground)_25%,var(--background))]"
+		/>
+	);
+}
+
+// How wide the target over a dot is, so it is easy to point at.
 const DOT_TARGET = 14;
 
-// The targets over the dots and rings: on hover, what was handed on or back there, and when.
+// The targets over the dots: on hover, what was handed on or back there, and when.
 function HandoffTargets({
 	timeline,
 	onHover,

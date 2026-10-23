@@ -4,7 +4,6 @@ import {connectionLabel, describeEntry, locateEntry} from '@/lib/access';
 import {formatTime} from '@/lib/format';
 import {
 	ABANDONED_OPACITY,
-	AGENT_COLOR_CLASSES,
 	formatDuration,
 	merged,
 	MIN_TRACK_PX,
@@ -12,6 +11,7 @@ import {
 	type Span,
 	TRACK_OPACITY,
 	type TimelineRequest,
+	TASK_COLOR_CLASS,
 } from '@/lib/timeline';
 import {STATUS_LABEL, type TaskStatus} from '@/lib/timeline-window';
 import type {ActivityTask, AuditEntry, Connection} from '@/lib/types';
@@ -20,9 +20,9 @@ import {cn} from '@proxy/ui/lib/utils';
 
 // What the two timelines draw with. A chart is an SVG the width of its box, measured as it
 // resizes, with a layer of hit targets over it: the drawing is plain shapes, and everything that
-// says more on hover or opens on click is an element with a name. An agent's color (the layout's
-// colorOf) is set as the text color, which the shapes take as currentColor: a task is a faint
-// track of it, with the requests made for the task solid on it; the hatching, the lines between
+// says more on hover or opens on click is an element with a name. The tasks' blue (the layout's
+// TASK_COLOR_CLASS) is set as the text color, which the shapes take as currentColor: a task is a
+// faint track of it, with the requests made for the task solid on it; the hatching, the lines between
 // rows and the axis are in the foreground's grays; amber and red are kept for a request blocked
 // or failed, what may need the person.
 
@@ -372,7 +372,7 @@ function RequestCluster({
 	);
 }
 
-export function Marker({
+function Marker({
 	blocked,
 	count,
 	className,
@@ -429,15 +429,35 @@ export function AxisLabels({
 	);
 }
 
-export function Legend({children}: {children: ReactNode}) {
+// What the legend can tell of in a row of a chart: how its task stands, the requests made for it
+// and, on a task's page, where it waited on what it handed on.
+type LegendRow = {status: TaskStatus; requests: TimelineRequest[]; waiting?: Span[]};
+
+/**
+ * The key to the marks on a chart, only for those on it: a task's track with its requests always,
+ * and the hatching, the pulse, the dashed track and the markers while any row has them. The rest
+ * the chart tells itself, on hover or on the axis.
+ */
+export function ChartLegend({rows}: {rows: LegendRow[]}) {
+	const any = (test: (row: LegendRow) => boolean) => rows.some(test);
+	const waiting = any((row) => (row.waiting ?? []).length > 0);
+	const running = any((row) => row.status === 'running');
+	const abandoned = any((row) => row.status === 'abandoned');
+	const blocked = any((row) => row.requests.some((request) => request.entry.outcome === 'denied'));
+	const failed = any((row) => row.requests.some((request) => request.entry.outcome === 'failed'));
 	return (
 		<div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-muted-foreground">
-			{children}
+			<Key swatch={<TrackSwatch requests />}>Task and its requests</Key>
+			{waiting && <Key swatch={<TrackSwatch hatched />}>Waiting on sub-tasks</Key>}
+			{running && <Key swatch={<TrackSwatch running />}>Under way</Key>}
+			{abandoned && <Key swatch={<TrackSwatch abandoned />}>Given up</Key>}
+			{blocked && <Key swatch={<Marker blocked className="relative" />}>Blocked</Key>}
+			{failed && <Key swatch={<Marker blocked={false} className="relative" />}>Failed</Key>}
 		</div>
 	);
 }
 
-export function Key({swatch, children}: {swatch: ReactNode; children: ReactNode}) {
+function Key({swatch, children}: {swatch: ReactNode; children: ReactNode}) {
 	return (
 		<span className="inline-flex items-center gap-1.5">
 			<span className="flex items-center">{swatch}</span>
@@ -447,7 +467,7 @@ export function Key({swatch, children}: {swatch: ReactNode; children: ReactNode}
 }
 
 /** A swatch of a task's track, for the legend: with requests on it, hatched, under way or given up. */
-export function TrackSwatch({
+function TrackSwatch({
 	requests = false,
 	hatched = false,
 	running = false,
@@ -459,7 +479,7 @@ export function TrackSwatch({
 	abandoned?: boolean;
 }) {
 	return (
-		<svg width="24" height="12" className={cn('block', AGENT_COLOR_CLASSES[0])} aria-hidden>
+		<svg width="24" height="12" className={cn('block', TASK_COLOR_CLASS)} aria-hidden>
 			{hatched && <HatchDefs id="legend-hatch" />}
 			<Track
 				span={{start: 0, end: running ? 20 : 24}}

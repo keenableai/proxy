@@ -1,37 +1,42 @@
 import {useEffect, useState} from 'react';
-import {useLoaderData, useLocation, useRevalidator} from 'react-router';
+import {Link, useLoaderData, useLocation, useRevalidator} from 'react-router';
 import {AppShell, PageTitle} from '@/components/app-shell';
 import {AuditEntryDialog} from '@/components/audit-entry-dialog';
 import {AuditList} from '@/components/audit-list';
 import {BackButton} from '@/components/back-button';
 import {AgentLogo} from '@/components/brand-logo';
+import {type ShownText, TextPanel, TextSwitch} from '@/components/goal-and-outcome';
 import {NotFound} from '@/components/not-found';
 import {RunTimeline} from '@/components/run-timeline';
 import {useOrgSlug} from '@/hooks/use-org';
+import {backFrom, backOf} from '@/lib/back';
 import {endedAt, STATUS_LABEL, taskStatus} from '@/lib/timeline-window';
 import {counted, formatDateTime} from '@/lib/format';
 import {formatDuration} from '@/lib/timeline';
 import type {AuditEntry} from '@/lib/types';
 import type {taskLoader} from '@/loaders';
 import {Badge} from '@proxy/ui/components/badge';
+import {Tooltip, TooltipContent, TooltipTrigger} from '@proxy/ui/components/tooltip';
 
-// How often a run with a task under way is read again, so its timeline moves along as the agent
-// works.
+// How often a task with any of its tasks under way is read again, so its timeline moves along as
+// the agent works.
 const REFRESH_MS = 5 * 1000;
 
-// One task of an agent's, in the run of its tasks it is in: what the task set out to do and how it
-// went, then the run's timeline, every task of the run under the one it was handed from, and
-// every request made for any of them, as the activity log lists them. Agents work through
-// sub-agents, so a task is one of them at work, and the run is what the agent did in one go. Read
-// again every few seconds while a task of the run is under way.
+// One task of an agent's: when it started, how long it took and, one at a time, what was asked
+// for or what came of it, then its run as a timeline, the task and every task handed on from it, at any depth,
+// under the one it was handed from, and every request made for any of them, as the activity log
+// lists them. Agents work through
+// sub-agents, so each task is one of them at work. Read again every few seconds while any of the
+// tasks is under way.
 export function TaskPage() {
 	const org = useOrgSlug();
 	const {run, agents, connections} = useLoaderData<typeof taskLoader>();
 	const revalidator = useRevalidator();
 	const location = useLocation();
 	const [opened, setOpened] = useState<AuditEntry | null>(null);
-	// Where the page was come to from, where that page said: the home page with its window as it
-	// was; else the activity log, at the task.
+	const [shown, setShown] = useState<ShownText>('goal');
+	// Where the page was come to from, where that page said (lib/back.ts): the home page with its
+	// window as it was, or the task this one was handed on from; else the activity log, at the task.
 	const cameFrom = backOf(location.state);
 	const task = run?.tasks.find((candidate) => candidate.id === run.task);
 	const running =
@@ -57,88 +62,86 @@ export function TaskPage() {
 	const status = taskStatus(task, now);
 	const agent = agents.find((candidate) => candidate.id === run.agentId);
 	const own = run.entries.filter((entry) => entry.taskId === task.id);
-	const ended = endedAt(task, now) ?? now;
+	const ended = endedAt(task, own, now) ?? now;
 	const summary = [
 		formatDuration(ended.getTime() - new Date(task.startedAt).getTime()),
 		counted(own.length, 'request'),
 		...countOutcomes(own),
 	];
-	const runSummary = [
-		counted(run.tasks.length, 'task'),
-		counted(run.entries.length, 'request'),
-		...countOutcomes(run.entries),
-	];
-
 	return (
 		<AppShell
 			title={
 				<>
 					<BackButton
-						to={cameFrom ?? `/${org}/activity?task=${encodeURIComponent(task.id)}`}
+						to={cameFrom?.back ?? `/${org}/activity?task=${encodeURIComponent(task.id)}`}
+						state={cameFrom?.then}
 						label={cameFrom ? 'Back' : 'Back to activity'}
 					/>
 					<PageTitle>{task.title}</PageTitle>
 				</>
 			}
 		>
-			<div className="flex flex-col gap-1.5 text-sm">
-				<div className="flex flex-wrap items-center gap-2">
-					<h1 className="text-base font-medium">{task.title}</h1>
-					<Badge variant={status === 'running' ? 'outline' : 'secondary'}>
-						{STATUS_LABEL[status]}
-					</Badge>
-				</div>
-				<p className="text-muted-foreground">{task.goal}</p>
-				<p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
-					<span>Started {formatDateTime(task.startedAt)}</span>
-					{summary.map((part) => (
-						<span key={part} className="contents">
-							<span aria-hidden>·</span>
-							<span>{part}</span>
-						</span>
-					))}
-				</p>
-				{task.outcome && (
-					<p>
-						<span className="text-muted-foreground">Handed back: </span>
-						{task.outcome}
+			{/* The page in four blocks, a little further apart than the shell sets them. */}
+			<div className="flex flex-col gap-5">
+				<div className="flex flex-col gap-2 text-sm">
+					<div className="flex items-start justify-between gap-3">
+						<div className="flex flex-wrap items-center gap-2">
+							<h1 className="text-base font-medium">{task.title}</h1>
+							<Badge variant={status === 'running' ? 'outline' : 'secondary'}>
+								{STATUS_LABEL[status]}
+							</Badge>
+						</div>
+						<Tooltip>
+							<TooltipTrigger
+								render={<span role="img" aria-label={agent?.name ?? 'Deleted agent'} />}
+							>
+								<AgentLogo providerId={agent?.providerId ?? ''} />
+							</TooltipTrigger>
+							<TooltipContent>{agent?.name ?? 'Deleted agent'}</TooltipContent>
+						</Tooltip>
+					</div>
+					<p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+						<span>Started {formatDateTime(task.startedAt)}</span>
+						{summary.map((part) => (
+							<span key={part} className="contents">
+								<span aria-hidden>·</span>
+								<span>{part}</span>
+							</span>
+						))}
+						{run.parent && (
+							<>
+								<span aria-hidden>·</span>
+								<span>
+									Handed on from{' '}
+									<Link
+										to={`/${org}/activity/tasks/${encodeURIComponent(run.parent.id)}`}
+										state={backFrom(location)}
+										className="text-foreground hover:underline"
+									>
+										{run.parent.title}
+									</Link>
+								</span>
+							</>
+						)}
 					</p>
-				)}
-			</div>
-			<div className="flex flex-col gap-2">
-				<p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-					{agent && (
-						<span className="inline-flex items-center gap-1.5 text-foreground">
-							<AgentLogo providerId={agent.providerId} />
-							{agent.name}
-						</span>
-					)}
-					{!agent && <span className="text-foreground">Deleted agent</span>}
-					<span>in one go, from {formatDateTime(run.tasks[0]?.startedAt ?? task.startedAt)}</span>
-					{runSummary.map((part) => (
-						<span key={part} className="contents">
-							<span aria-hidden>·</span>
-							<span>{part}</span>
-						</span>
-					))}
-				</p>
+					<TextSwitch shown={shown} hasOutcome={task.outcome !== null} onChange={setShown} />
+				</div>
+				<TextPanel shown={shown} goal={task.goal} outcome={task.outcome} className="text-sm" />
 				<RunTimeline
 					tasks={run.tasks}
 					entries={run.entries}
 					now={run.now}
-					agentId={run.agentId}
-					focus={task.id}
 					connections={connections}
 					onOpenEntry={setOpened}
 				/>
+				<AuditList
+					entries={[...run.entries].reverse()}
+					agents={agents}
+					connections={connections}
+					tasks={run.tasks}
+					showAgent={false}
+				/>
 			</div>
-			<AuditList
-				entries={[...run.entries].reverse()}
-				agents={agents}
-				connections={connections}
-				tasks={run.tasks}
-				showAgent={false}
-			/>
 			<AuditEntryDialog
 				entry={opened}
 				agents={agents}
@@ -158,12 +161,4 @@ function countOutcomes(entries: AuditEntry[]): string[] {
 		...(blocked > 0 ? [`${blocked} blocked`] : []),
 		...(failed > 0 ? [`${failed} failed`] : []),
 	];
-}
-
-// The address a page's state says to go back to, where it says one.
-function backOf(state: unknown): string | null {
-	if (typeof state !== 'object' || state === null || !('back' in state)) {
-		return null;
-	}
-	return typeof state.back === 'string' ? state.back : null;
 }

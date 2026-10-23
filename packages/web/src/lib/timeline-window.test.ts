@@ -1,6 +1,14 @@
 import {describe, expect, test} from 'bun:test';
-import type {ActivityTask} from '@/lib/types';
-import {gridlines, presetOf, taskStatus, windowLabel, windowStart, zoomed} from './timeline-window';
+import type {ActivityTask, AuditEntry} from '@/lib/types';
+import {
+	endedAt,
+	gridlines,
+	presetOf,
+	taskStatus,
+	windowLabel,
+	windowStart,
+	zoomed,
+} from './timeline-window';
 
 const now = new Date('2026-10-16T12:00:00Z');
 const from = new Date('2026-10-16T11:00:00Z');
@@ -26,6 +34,41 @@ describe('taskStatus', () => {
 		expect(taskStatus(task({finishedAt: '2026-10-16T11:58:00Z'}), now)).toBe('finished');
 		expect(taskStatus(task({startedAt: '2026-10-15T12:00:01Z'}), now)).toBe('running');
 		expect(taskStatus(task({startedAt: '2026-10-15T12:00:00Z'}), now)).toBe('abandoned');
+	});
+});
+
+describe('endedAt', () => {
+	const request = (at: string, durationMs = 0): AuditEntry => ({
+		id: `e-${at}`,
+		at,
+		agentId: 'a1',
+		connectionId: 'mail-1',
+		collectionId: 'emails',
+		action: 'list',
+		recordTitle: null,
+		query: null,
+		outcome: 'allowed',
+		error: null,
+		via: 'mcp',
+		taskId: 't1',
+		durationMs,
+		userId: null,
+		userName: null,
+	});
+
+	test('a finished task ended when it was finished, and one under way has not ended', () => {
+		expect(endedAt(task({finishedAt: '2026-10-16T11:58:00Z'}), [], now)).toEqual(
+			new Date('2026-10-16T11:58:00Z'),
+		);
+		expect(endedAt(task({}), [request('2026-10-16T11:30:00Z')], now)).toBeNull();
+	});
+
+	test('an abandoned task ended when its last request was done, or when it started with none', () => {
+		const abandoned = task({startedAt: '2026-10-15T09:00:00Z'});
+		expect(
+			endedAt(abandoned, [request('2026-10-15T09:10:00Z'), request('2026-10-15T09:40:00Z')], now),
+		).toEqual(new Date('2026-10-15T09:40:00Z'));
+		expect(endedAt(abandoned, [], now)).toEqual(new Date('2026-10-15T09:00:00Z'));
 	});
 });
 

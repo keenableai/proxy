@@ -64,7 +64,10 @@ const LABEL_PX = 72;
 /**
  * The timeline of `tasks` over `window`, `width` pixels wide, as it stood at `now`: every agent's
  * row, the busiest first, over the tasks it was given that were under way in the window, each bar
- * in the lane `preferred` gives it where that is free, else the first that is.
+ * in the lane `preferred` gives it where that is free, else the first that is. With `held`, a bar
+ * keeps the lane `preferred` gives it even where another bar is there, the two overlapping, and no
+ * lane is opened for one with no lane to keep: for the moment the view is zooming in on a bar, so
+ * bars part along the way rather than hop lanes or open ones empty again at the end.
  */
 export function buildActivityTimeline(
 	allTasks: ActivityTask[],
@@ -73,9 +76,17 @@ export function buildActivityTimeline(
 	window: Window,
 	width: number,
 	preferred: LanePreferences = new Map(),
+	held = false,
 ): ActivityTimeline {
 	const time = (iso: string) => new Date(iso).getTime();
-	const endOf = (task: ActivityTask) => (endedAt(task, now) ?? now).getTime();
+	const ofTask = new Map<string, AuditEntry[]>();
+	for (const entry of entries) {
+		if (entry.taskId !== null) {
+			ofTask.set(entry.taskId, [...(ofTask.get(entry.taskId) ?? []), entry]);
+		}
+	}
+	const endOf = (task: ActivityTask) =>
+		(endedAt(task, ofTask.get(task.id) ?? [], now) ?? now).getTime();
 	const from = window.from.getTime();
 	const to = window.to.getTime();
 	const spanMs = Math.max(to - from, 1);
@@ -129,8 +140,9 @@ export function buildActivityTimeline(
 			lane.every(
 				(other) => other.end + LANE_GAP_PX <= bar.start || bar.end + LANE_GAP_PX <= other.start,
 			);
-		// Bars with a lane to keep take it first, so a bar new to the window can't take it from them;
-		// then every other bar takes the first lane that is free.
+		// Bars with a lane to keep take it first, so a bar new to the window can't take it from them,
+		// whether or not it is free while the view is zooming; then every other bar takes the first
+		// lane that is free.
 		const place = (bar: ActivityBar, index: number) => {
 			while (lanes.length <= index) {
 				lanes.push([]);
@@ -140,7 +152,7 @@ export function buildActivityTimeline(
 		const rest: ActivityBar[] = [];
 		for (const bar of own) {
 			const wanted = laneWanted(bar, preferred);
-			if (wanted !== undefined && free(lanes[wanted], bar)) {
+			if (wanted !== undefined && (held || free(lanes[wanted], bar))) {
 				place(bar, wanted);
 				continue;
 			}
@@ -148,7 +160,11 @@ export function buildActivityTimeline(
 		}
 		for (const bar of rest) {
 			const first = lanes.findIndex((lane) => free(lane, bar));
-			place(bar, first === -1 ? lanes.length : first);
+			if (first !== -1) {
+				place(bar, first);
+				continue;
+			}
+			place(bar, held ? Math.max(lanes.length - 1, 0) : lanes.length);
 		}
 		for (const lane of lanes) {
 			lane.sort((a, b) => a.start - b.start);
@@ -181,6 +197,26 @@ export function keyOf(bar: ActivityBar): string {
 function laneWanted(bar: ActivityBar, preferred: LanePreferences): number | undefined {
 	const id = bar.tasks[0]?.id ?? '';
 	return preferred.get(keyOf(bar)) ?? preferred.get(bar.tasks.length > 1 ? id : `cluster:${id}`);
+}
+
+/**
+ * The lane every task of the timeline is in, under every key a bar for it could carry: its own,
+ * and `cluster:` and its id, so that however the tasks fall into bars as the view zooms, each bar
+ * finds the lane its tasks end up in.
+ */
+export function lanesEverywhere(timeline: ActivityTimeline): Map<string, number> {
+	const lanes = new Map<string, number>();
+	for (const row of timeline.rows) {
+		row.lanes.forEach((lane, index) => {
+			for (const bar of lane) {
+				for (const task of bar.tasks) {
+					lanes.set(task.id, index);
+					lanes.set(`cluster:${task.id}`, index);
+				}
+			}
+		});
+	}
+	return lanes;
 }
 
 /** The lane every bar of the timeline is in, by its key: what each is given again next time. */

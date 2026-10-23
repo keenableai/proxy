@@ -203,20 +203,29 @@ export async function listAgentTasks(
 	);
 }
 
-/** The agent's tasks the viewer sees started from `from` to `to`, the first `take`, in the order started. */
-export async function listAgentTasksBetween(
+/**
+ * The sub-tasks of the task `taskId`, at every depth, that the viewer sees, in the order started:
+ * the first `take` of them, level by level, so a task with more under it than that shows what it
+ * handed on itself before what those handed on in turn.
+ */
+export async function listSubTasks(
 	viewer: Viewer,
-	agentId: string,
-	from: Date,
-	to: Date,
+	taskId: string,
 	take: number,
 ): Promise<Result<AgentTaskRow[], ApiError>> {
-	return wrapDb(() =>
-		db.agentTask.findMany({
-			where: {...visibleTo(viewer), agentId, createdAt: {gte: from, lte: to}},
-			select: taskSelect,
-			orderBy: {createdAt: 'asc'},
-			take,
-		}),
-	);
+	return wrapDb(async () => {
+		const found: AgentTaskRow[] = [];
+		let parentIds = [taskId];
+		while (parentIds.length > 0 && found.length < take) {
+			const level: AgentTaskRow[] = await db.agentTask.findMany({
+				where: {...visibleTo(viewer), parentId: {in: parentIds}},
+				select: taskSelect,
+				orderBy: {createdAt: 'asc'},
+				take: take - found.length,
+			});
+			found.push(...level);
+			parentIds = level.map((task) => task.id);
+		}
+		return found.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+	});
 }

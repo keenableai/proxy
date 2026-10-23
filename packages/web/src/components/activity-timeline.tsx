@@ -3,16 +3,13 @@ import {Link} from 'react-router';
 import {AgentLogo} from '@/components/brand-logo';
 import {
 	AxisLabels,
-	Key,
-	Legend,
-	Marker,
+	ChartLegend,
 	Pulse,
 	RequestMarks,
 	RequestTargets,
 	TaskNames,
 	TaskTooltip,
 	Track,
-	TrackSwatch,
 } from '@/components/timeline-chart';
 import {useChartWidth} from '@/hooks/use-chart-width';
 import {useOrgSlug} from '@/hooks/use-org';
@@ -23,16 +20,16 @@ import {
 	buildActivityTimeline,
 	keyOf,
 	laneAssignments,
+	lanesEverywhere,
 	type LanePreferences,
 	type Window,
 } from '@/lib/activity-timeline';
 import {
-	AGENT_COLOR_CLASSES,
 	ABANDONED_OPACITY,
-	colorOf,
 	formatDuration,
 	MIN_TRACK_PX,
 	requestSummary,
+	TASK_COLOR_CLASS,
 } from '@/lib/timeline';
 import {STATUS_LABEL} from '@/lib/timeline-window';
 import type {ActivityTask, AgentLogin, AuditEntry, Connection} from '@/lib/types';
@@ -75,6 +72,9 @@ type Props = {
 	onOpenEntry: (entry: AuditEntry) => void;
 	// Zoom the window in on a stretch of time, in milliseconds since the epoch.
 	onZoom: (from: number, to: number) => void;
+	// The windows the view is about to pass through, zooming in on a bar, in order; none otherwise.
+	// Rows make room for every one of them as the zoom sets off, so they move with it.
+	ahead: Window[];
 	// Where a task's page comes back to: this page, with the window as it is.
 	backTo: string;
 };
@@ -85,8 +85,9 @@ type Props = {
 // once each take a lane of the row; short ones close together are one bar, which zooms in on them.
 // A bar says more on hover and opens the task's page; a request opens in full; an agent's name
 // opens the agent's page. As the window moves, a row or lane that comes into need grows in at
-// once, while bars keep their lanes and rows their order; a second after the window comes to
-// rest, bars settle into the lowest lanes, and rows and lanes no longer needed shrink away.
+// once, while bars keep their lanes and rows their order, and zooming in on a bar, rows make room
+// for the whole way at once; a second after the window comes to rest, bars settle into the lowest
+// lanes, and rows and lanes no longer needed shrink away.
 export function ActivityTimeline({
 	tasks,
 	entries,
@@ -96,12 +97,33 @@ export function ActivityTimeline({
 	connections,
 	onOpenEntry,
 	onZoom,
+	ahead,
 	backTo,
 }: Props) {
 	const [measure, width] = useChartWidth();
 	const [preferred, setPreferred] = useState<LanePreferences>(() => new Map());
-	const timeline = buildActivityTimeline(tasks, entries, new Date(now), window, width, preferred);
-	const rows = useSettledRows(timeline, window, preferred, setPreferred);
+	// Zooming in on a bar, every bar keeps the lane it ends up in the whole way, overlapping for a
+	// moment rather than opening lanes that would be empty again at the end: the layout where the
+	// zoom ends is made first, afresh, so its lanes are the fewest, and the lanes it gives go before
+	// every other preference.
+	const destination = ahead.at(-1);
+	const final = destination
+		? buildActivityTimeline(tasks, entries, new Date(now), destination, width)
+		: null;
+	const lanes = final ? new Map([...preferred, ...lanesEverywhere(final)]) : preferred;
+	const timeline = buildActivityTimeline(
+		tasks,
+		entries,
+		new Date(now),
+		window,
+		width,
+		lanes,
+		final !== null,
+	);
+	const laidAhead = ahead.map((coming) =>
+		buildActivityTimeline(tasks, entries, new Date(now), coming, width, lanes, true),
+	);
+	const rows = useSettledRows(timeline, laidAhead, window, preferred, setPreferred);
 	const titleOf = (taskId: string | null) =>
 		tasks.find((candidate) => candidate.id === taskId)?.title ?? null;
 	const nowAt = timeline.ticks.find((tick) => tick.label === 'Now');
@@ -147,10 +169,7 @@ export function ActivityTimeline({
 								<svg
 									width={width}
 									height={laneHeight(row.lanes)}
-									className={cn(
-										'absolute top-0 left-0 block',
-										AGENT_COLOR_CLASSES[colorOf(row.agentId)],
-									)}
+									className={cn('absolute top-0 left-0 block', TASK_COLOR_CLASS)}
 								>
 									{barsOf(row).map(({bar, laneIndex}) => (
 										// The fade on coming in is on an inner group: its keyframes set a transform
@@ -231,14 +250,7 @@ export function ActivityTimeline({
 					<AxisLabels ticks={timeline.ticks} width={width} />
 				</div>
 			</div>
-			<Legend>
-				<Key swatch={<TrackSwatch />}>Task</Key>
-				<Key swatch={<TrackSwatch requests />}>Requests</Key>
-				<Key swatch={<TrackSwatch running />}>Under way</Key>
-				<Key swatch={<TrackSwatch abandoned />}>Given up</Key>
-				<Key swatch={<Marker blocked className="relative" />}>Blocked</Key>
-				<Key swatch={<Marker blocked={false} className="relative" />}>Failed</Key>
-			</Legend>
+			<ChartLegend rows={rows.flatMap((row) => row.row?.lanes.flat() ?? [])} />
 		</div>
 	);
 }
@@ -272,6 +284,7 @@ type Held = {agentId: string; lanes: number};
 // the window or that needs fewer lanes is let go, and one let go fades out before it is taken away.
 function useSettledRows(
 	timeline: ActivityLayout,
+	ahead: ActivityLayout[],
 	window: Window,
 	preferred: LanePreferences,
 	setPreferred: (next: LanePreferences) => void,
@@ -285,28 +298,42 @@ function useSettledRows(
 
 	const byAgent = new Map(rows.map((row) => [row.agentId, row]));
 	// The layout's rows slot in among those kept, each before the first kept row the layout puts
-	// after it.
+	// after it; then those of the layouts ahead, the same way.
 	const order = held.map((one) => one.agentId);
-	rows.forEach((row, index) => {
-		if (order.includes(row.agentId)) {
-			return;
-		}
-		const after = rows.slice(index + 1).find((candidate) => order.includes(candidate.agentId));
-		order.splice(after ? order.indexOf(after.agentId) : order.length, 0, row.agentId);
-	});
-	// What is kept now: what the layout needs, never less than what was kept.
+	for (const layout of [timeline, ...ahead]) {
+		layout.rows.forEach((row, index) => {
+			if (order.includes(row.agentId)) {
+				return;
+			}
+			const after = layout.rows
+				.slice(index + 1)
+				.find((candidate) => order.includes(candidate.agentId));
+			order.splice(after ? order.indexOf(after.agentId) : order.length, 0, row.agentId);
+		});
+	}
+	// What is kept now: what the layout needs, and what any layout ahead will, never less than
+	// what was kept.
 	const kept = order.map((agentId) => ({
 		agentId,
 		lanes: Math.max(
 			byAgent.get(agentId)?.lanes.length ?? 0,
 			held.find((one) => one.agentId === agentId)?.lanes ?? 0,
+			...ahead.map(
+				(layout) => layout.rows.find((row) => row.agentId === agentId)?.lanes.length ?? 0,
+			),
 		),
 	}));
 	// As the layout changes shape, what is kept grows with it at once, a row on its way out whose
 	// agent is back stays, and every bar's lane is remembered.
-	const signature = rows
-		.map((row) => `${row.agentId}:${row.lanes.map((lane) => lane.map(keyOf).join('+')).join('/')}`)
-		.join(',');
+	const signature = [timeline, ...ahead]
+		.map((layout) =>
+			layout.rows
+				.map(
+					(row) => `${row.agentId}:${row.lanes.map((lane) => lane.map(keyOf).join('+')).join('/')}`,
+				)
+				.join(','),
+		)
+		.join(';');
 	if (signature !== seen) {
 		setSeen(signature);
 		if (
@@ -320,7 +347,12 @@ function useSettledRows(
 		if ([...leaving].some((agentId) => byAgent.has(agentId))) {
 			setLeaving(new Set([...leaving].filter((agentId) => !byAgent.has(agentId))));
 		}
-		const assigned = laneAssignments(timeline);
+		// Every bar's lane is remembered; zooming in on a bar, the lanes where the zoom ends come
+		// first, so bars head there from the start.
+		const assigned = new Map([
+			...laneAssignments(timeline),
+			...laneAssignments(ahead.at(-1) ?? timeline),
+		]);
 		if ([...assigned].some(([key, lane]) => preferred.get(key) !== lane)) {
 			setPreferred(new Map([...preferred, ...assigned]));
 		}
@@ -503,7 +535,7 @@ function BarTarget({
 				render={
 					<Link
 						to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
-						state={{back: backTo}}
+						state={{back: backTo, then: null}}
 						preventScrollReset
 						aria-label={task.title}
 						className={className}

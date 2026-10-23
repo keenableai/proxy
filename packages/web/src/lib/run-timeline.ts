@@ -11,17 +11,17 @@ import {
 import {endedAt, type TaskStatus, taskStatus} from '@/lib/timeline-window';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
 
-// A run on a task's page: what an agent did in one go, as a tree of tasks over time. Agents work
-// through sub-agents, and each task is one of them at work, so every task has a row of its own
-// under the task it was handed from, indented a step further. The axis runs from when the run's
-// first task started to the last thing done, or to now while a task is still under way, in
-// pixels: stretches of it where nothing happened, no request in flight and no task starting or
-// finishing, are folded to a narrow break, so the busy minutes of a day-long run take the width
-// and its idle hours don't. A row's track runs as long as its task did; on it, every request made
-// for the task, as long as each took, and hatching where the task waited on what it handed on.
-// Short tasks handed on one after another are grouped into one row, since a row each would hold
-// nothing readable. Nothing here is what the agent thought or said, only what Personal Agent
-// Proxy saw: the tasks, and the requests.
+// A task's run on its page: how it went, as a tree of tasks over time. Agents work through
+// sub-agents, and each task is one of them at work, so the task has a row at the top and every
+// task handed on from it, at any depth, a row of its own under the task it was handed from,
+// indented a step further. The axis runs from when the task started to the last thing done, or to
+// now while a task is still under way, in pixels: stretches of it where nothing happened, no
+// request in flight and no task starting or finishing, are folded to a narrow break, so the busy
+// minutes of a day-long run take the width and its idle hours don't. A row's track runs as long as
+// its task did; on it, every request made for the task, as long as each took, and hatching where
+// the task waited on what it handed on. Short tasks handed on one after another are grouped into
+// one row, since a row each would hold nothing readable. Nothing here is what the agent thought or
+// said, only what Personal Agent Proxy saw: the tasks, and the requests.
 
 export type RunRow = {
 	kind: 'task' | 'group';
@@ -214,39 +214,31 @@ function axisTicks(knots: Array<{ms: number; px: number}>, width: number): RunTi
 }
 
 /**
- * Which tasks' sub-tasks are laid out under them at first: those the agent started itself, so the
- * tasks they handed on show, and whatever leads down to `focus`, so it does too. Every other
- * task's are rolled into it.
+ * Which tasks' sub-tasks are laid out under them at first: those at the top, the page's own task,
+ * so what it handed on shows. Every other task's are rolled into it.
  */
-export function defaultExpanded(tasks: ActivityTask[], focus?: string): Set<string> {
+export function defaultExpanded(tasks: ActivityTask[]): Set<string> {
 	const ids = new Set(tasks.map((task) => task.id));
-	const expanded = new Set(
+	return new Set(
 		tasks
 			.filter((task) => task.parentId === null || !ids.has(task.parentId))
 			.map((task) => task.id),
 	);
-	let parentId = tasks.find((task) => task.id === focus)?.parentId ?? null;
-	while (parentId !== null && ids.has(parentId)) {
-		expanded.add(parentId);
-		parentId = tasks.find((task) => task.id === parentId)?.parentId ?? null;
-	}
-	return expanded;
 }
 
 /**
  * The timeline of a run, `width` pixels wide, as it stood at `now`: every task in a row under the
  * task it was handed from, those in `expanded` with their sub-tasks laid out under them and every
- * other's rolled in, short tasks one after another grouped; the task `focus` always shown.
+ * other's rolled in, short tasks one after another grouped.
  */
 export function buildRunTimeline(
 	tasks: ActivityTask[],
 	entries: AuditEntry[],
 	now: Date,
 	width: number,
-	{expanded = new Set(), focus}: {expanded?: ReadonlySet<string>; focus?: string} = {},
+	{expanded = new Set()}: {expanded?: ReadonlySet<string>} = {},
 ): RunTimeline {
 	const time = (iso: string) => new Date(iso).getTime();
-	const endOf = (task: ActivityTask) => (endedAt(task, now) ?? now).getTime();
 	if (tasks.length === 0) {
 		const axis = buildAxis(MIN_SPAN_MS, [], width);
 		return {rows: [], width, spanMs: MIN_SPAN_MS, ticks: axis.ticks, breaks: axis.breaks};
@@ -259,6 +251,8 @@ export function buildRunTimeline(
 		}
 		ofTask.set(entry.taskId, [...(ofTask.get(entry.taskId) ?? []), entry]);
 	}
+	const endOf = (task: ActivityTask) =>
+		(endedAt(task, ofTask.get(task.id) ?? [], now) ?? now).getTime();
 	const origin = Math.min(...tasks.map((task) => time(task.startedAt)));
 	const running = tasks.some((task) => taskStatus(task, now) === 'running');
 	const lastActive = Math.max(
@@ -327,11 +321,7 @@ export function buildRunTimeline(
 	const lay = (children: ActivityTask[], depth: number, parentRow: number | null): Span[] => {
 		const laid: Span[] = [];
 		for (const item of grouped(children, spanOf)) {
-			if (
-				item.length > 1 &&
-				!expanded.has(groupId(item)) &&
-				!item.some((task) => task.id === focus)
-			) {
+			if (item.length > 1 && !expanded.has(groupId(item))) {
 				const rolled = item.flatMap((task) => [task, ...descendants(task)]);
 				const members = item.map(spanOf);
 				const first = Math.min(...item.map((task) => time(task.startedAt)));

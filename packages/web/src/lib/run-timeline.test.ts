@@ -120,16 +120,14 @@ describe('buildAxis', () => {
 });
 
 describe('defaultExpanded', () => {
-	test('lays out what the agent’s own tasks handed on, and the way down to the task in focus', () => {
+	test('lays out what the tasks at the top handed on, and rolls in the rest', () => {
 		const tasks = [
 			task({id: 'top'}),
 			task({id: 'mid', parentId: 'top'}),
 			task({id: 'low', parentId: 'mid'}),
-			task({id: 'leaf', parentId: 'low'}),
 			task({id: 'other', parentId: 'elsewhere'}),
 		];
 		expect([...defaultExpanded(tasks)].sort()).toEqual(['other', 'top']);
-		expect([...defaultExpanded(tasks, 'leaf')].sort()).toEqual(['low', 'mid', 'other', 'top']);
 	});
 });
 
@@ -228,7 +226,7 @@ describe('buildRunTimeline', () => {
 		]);
 	});
 
-	test('short tasks one after another share a row until it is opened, or one of them is in focus', () => {
+	test('short tasks one after another share a row until it is opened', () => {
 		const parent = task({id: 'parent', finishedAt: '2026-10-16T09:05:00Z', outcome: 'Done'});
 		const burst = ['a', 'b', 'c'].map((id, index) =>
 			task({
@@ -263,11 +261,6 @@ describe('buildRunTimeline', () => {
 			expanded: new Set(['parent', groupId(burst)]),
 		}).rows;
 		expect(apart.map((row) => row.id)).toEqual(['parent', 'a', 'b', 'c']);
-		const focused = buildRunTimeline([parent, ...burst], entries, now, WIDTH, {
-			expanded: new Set(['parent']),
-			focus: 'b',
-		}).rows;
-		expect(focused.map((row) => row.id)).toEqual(['parent', 'a', 'b', 'c']);
 	});
 
 	test('a task still under way runs to the end of the axis, which is now', () => {

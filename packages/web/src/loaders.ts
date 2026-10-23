@@ -170,8 +170,8 @@ export async function activityLoader(args: OrgParams & {request: Request}) {
 	};
 }
 
-// A task's page: the run of its agent's tasks it is in, and every request made for them, with the
-// connections and agents to name what each request used and who made it. Null where the task is
+// A task's page: the task, its sub-tasks and every request made for them, with the connections
+// and agents to name what each request used and who made it. Null where the task is
 // not one the person sees, so the page says so in its own frame.
 export async function taskLoader(args: {params: {org?: string; taskId?: string}}) {
 	const org = orgOf(args);

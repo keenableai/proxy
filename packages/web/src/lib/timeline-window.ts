@@ -1,5 +1,6 @@
 import {taskEndedAt} from '@proxy/utils/tasks';
-import type {ActivityTask} from '@/lib/types';
+import {requestTimes} from '@/lib/timeline';
+import type {ActivityTask, AuditEntry} from '@/lib/types';
 
 // The home page's timeline looks back over a window of time ending now, chosen from a few on offer
 // or zoomed to any length; and a task, there and on its page, is under way, finished or abandoned.
@@ -86,14 +87,32 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
 // When it was started and finished, all a task's status needs.
 type TaskTimes = Pick<ActivityTask, 'startedAt' | 'finishedAt'>;
 
-/** When the task ended, if it has by `now`: finished, or abandoned (@proxy/utils/tasks). */
-export function endedAt(task: TaskTimes, now: Date): Date | null {
-	return taskEndedAt(
-		{
-			startedAt: new Date(task.startedAt),
-			finishedAt: task.finishedAt === null ? null : new Date(task.finishedAt),
-		},
-		now,
+// When the task was given up on, if it has been by `now`: a day after it started, never finished
+// (@proxy/utils/tasks); null while it is under way, or where it was finished.
+function abandonedAt(task: TaskTimes, now: Date): Date | null {
+	if (task.finishedAt !== null) {
+		return null;
+	}
+	return taskEndedAt({startedAt: new Date(task.startedAt), finishedAt: null}, now);
+}
+
+/**
+ * When the task ended, if it has by `now`: when it was finished; or, given up on, when the last
+ * of `requests`, those made for it, was done, or when it started where none was made, since
+ * nothing was done for it after. Null while it is under way.
+ */
+export function endedAt(task: TaskTimes, requests: AuditEntry[], now: Date): Date | null {
+	if (task.finishedAt !== null) {
+		return new Date(task.finishedAt);
+	}
+	if (abandonedAt(task, now) === null) {
+		return null;
+	}
+	return new Date(
+		Math.max(
+			new Date(task.startedAt).getTime(),
+			...requests.map((request) => requestTimes(request).to),
+		),
 	);
 }
 
@@ -101,7 +120,7 @@ export function taskStatus(task: TaskTimes, now: Date): TaskStatus {
 	if (task.finishedAt !== null) {
 		return 'finished';
 	}
-	return endedAt(task, now) === null ? 'running' : 'abandoned';
+	return abandonedAt(task, now) === null ? 'running' : 'abandoned';
 }
 
 // The stretches of time a window is marked off in: the windows on offer each have their own, a

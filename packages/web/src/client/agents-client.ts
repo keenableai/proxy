@@ -117,7 +117,7 @@ export function listActivity(org: string, filter: ActivityFilter) {
 	);
 }
 
-/** A task's page: the run of its agent's tasks it is in, and every request made for them. */
+/** A task's page: the task, its sub-tasks at every depth, and every request made for them. */
 export function getTaskRun(org: string, taskId: string) {
 	return apiRequest(
 		'GET',

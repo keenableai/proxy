@@ -113,14 +113,16 @@ export const activityTimelineSchema = z.object({
 
 export type ActivityTimeline = z.infer<typeof activityTimelineSchema>;
 
-// A task's page: the run it is in, what its agent did in one go, and every request made for it.
+// A task's page: the task, every task handed on from it, and every request made for them.
 export const taskRunSchema = z.object({
 	// When the answer was made: where a task still under way has got to.
 	now: z.string(),
-	// The task the page is about, among `tasks`.
+	// The task the page is about, first among `tasks`.
 	task: z.string(),
 	agentId: z.string(),
-	// The run's tasks, in the order started.
+	// The task it is a sub-task of, where it is one the person sees.
+	parent: activityTaskSchema.nullable(),
+	// The task and its sub-tasks at every depth, in the order started.
 	tasks: z.array(activityTaskSchema),
 	// In the order they were made.
 	entries: z.array(auditEntrySchema),
