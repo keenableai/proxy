@@ -1,4 +1,4 @@
-import {type ReactNode, useId} from 'react';
+import {memo, type ReactNode, useId} from 'react';
 import type {RequestTooltipHandle} from '@/hooks/use-request-tooltip';
 import {connectionLabel, describeEntry, locateEntry} from '@/lib/access';
 import {formatTime} from '@/lib/format';
@@ -156,7 +156,7 @@ export function Shimmer({
  * The requests made for a task, solid on its track, those that touch drawn as one: in the task's
  * color, or over it in amber where blocked and red where failed.
  */
-export function RequestMarks({
+export const RequestMarks = memo(function RequestMarks({
 	requests,
 	y,
 	height,
@@ -188,7 +188,7 @@ export function RequestMarks({
 			{marks('failed')}
 		</>
 	);
-}
+});
 
 // How many of a group's tasks are named on hover before the rest are counted.
 const MAX_NAMED = 8;
@@ -344,13 +344,14 @@ export const MIN_TARGET_PX = 8;
  * The targets for a row's requests: every one that didn't go through, and every other where its
  * stretch of the track is wide enough to point at.
  */
-export function RequestTargets({
+export const RequestTargets = memo(function RequestTargets({
 	requests,
 	top,
 	height,
 	connections,
 	tooltip,
-	forTask,
+	ownTaskId,
+	titleOf,
 	onOpen,
 }: {
 	requests: TimelineRequest[];
@@ -358,8 +359,10 @@ export function RequestTargets({
 	height: number;
 	connections: Connection[];
 	tooltip: RequestTooltipHandle;
-	// The task a request was made for, where that is one rolled into the row's.
-	forTask: (entry: AuditEntry) => string | null;
+	// The row's own task, whose requests aren't named as made for it; null for a row of several.
+	ownTaskId: string | null;
+	// The name of the task a request was made for, where that is one rolled into the row's.
+	titleOf: (taskId: string | null) => string | null;
 	onOpen: (entry: AuditEntry) => void;
 }) {
 	return (
@@ -377,13 +380,17 @@ export function RequestTargets({
 						height={height}
 						connections={connections}
 						tooltip={tooltip}
-						forTask={forTask(request.entry)}
+						forTask={
+							ownTaskId !== null && request.entry.taskId === ownTaskId
+								? null
+								: titleOf(request.entry.taskId)
+						}
 						onOpen={() => onOpen(request.entry)}
 					/>
 				))}
 		</>
 	);
-}
+});
 
 /** The labels under the axis, each centred on its mark but kept inside the chart at either end. */
 export function AxisLabels({

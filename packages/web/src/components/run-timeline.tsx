@@ -1,5 +1,5 @@
 import {ChevronDownIcon, ChevronRightIcon, CornerDownRightIcon} from 'lucide-react';
-import {Fragment, useId, useMemo, useState} from 'react';
+import {Fragment, useCallback, useId, useMemo, useState} from 'react';
 import {Link, useLocation} from 'react-router';
 import {
 	AxisLabels,
@@ -77,8 +77,11 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 		() => buildRunTimeline(tasks, entries, new Date(now), width, {expanded}),
 		[tasks, entries, now, width, expanded],
 	);
-	const titleOf = (taskId: string | null) =>
-		tasks.find((candidate) => candidate.id === taskId)?.title ?? null;
+	// The same from one drawing to the next, so the rows' requests are drawn again only as they change.
+	const titleOf = useCallback(
+		(taskId: string | null) => tasks.find((candidate) => candidate.id === taskId)?.title ?? null,
+		[tasks],
+	);
 	const toggle = (row: RunRow) =>
 		setExpanded((current) => {
 			const next = new Set(current);
@@ -223,9 +226,8 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 										height={TRACK_H}
 										connections={connections}
 										tooltip={requestTooltip}
-										forTask={(entry) =>
-											row.kind === 'task' && entry.taskId === row.id ? null : titleOf(entry.taskId)
-										}
+										ownTaskId={row.kind === 'task' ? row.id : null}
+										titleOf={titleOf}
 										onOpen={onOpenEntry}
 									/>
 								</Fragment>

@@ -1,4 +1,4 @@
-import {Fragment, useEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Link} from 'react-router';
 import {AgentLogo} from '@/components/brand-logo';
 import {
@@ -127,8 +127,11 @@ export function ActivityTimeline({
 	}, [prepared, ahead, width, preferred]);
 	const timeline = layActivityTimeline(prepared, window, width, lanes, final !== null);
 	const rows = useSettledRows(timeline, laidAhead, window, preferred, setPreferred);
-	const titleOf = (taskId: string | null) =>
-		tasks.find((candidate) => candidate.id === taskId)?.title ?? null;
+	// The same from one drawing to the next, so the rows' requests are drawn again only as they change.
+	const titleOf = useCallback(
+		(taskId: string | null) => tasks.find((candidate) => candidate.id === taskId)?.title ?? null,
+		[tasks],
+	);
 	const nowAt = timeline.ticks.find((tick) => tick.label === 'Now');
 	// A row's box as it is drawn: full while shown, nothing while coming or going.
 	const rowStyle = (row: ShownRow) => ({
@@ -244,11 +247,8 @@ export function ActivityTimeline({
 												height={BAR_H}
 												connections={connections}
 												tooltip={requestTooltip}
-												forTask={(entry) =>
-													bar.tasks.length === 1 && entry.taskId === bar.tasks[0]?.id
-														? null
-														: titleOf(entry.taskId)
-												}
+												ownTaskId={bar.tasks.length === 1 ? (bar.tasks[0]?.id ?? null) : null}
+												titleOf={titleOf}
 												onOpen={onOpenEntry}
 											/>
 										</Fragment>
