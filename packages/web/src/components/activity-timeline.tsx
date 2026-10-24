@@ -7,10 +7,12 @@ import {
 	Shimmer,
 	RequestMarks,
 	RequestTargets,
+	RequestTooltip,
 	TaskNames,
 	TaskTooltip,
 	Track,
 } from '@/components/timeline-chart';
+import {useRequestTooltip} from '@/hooks/use-request-tooltip';
 import {useChartWidth} from '@/hooks/use-chart-width';
 import {useOrgSlug} from '@/hooks/use-org';
 import {
@@ -101,6 +103,7 @@ export function ActivityTimeline({
 	backTo,
 }: Props) {
 	const [measure, width] = useChartWidth();
+	const requestTooltip = useRequestTooltip();
 	const [preferred, setPreferred] = useState<LanePreferences>(() => new Map());
 	// Zooming in on a bar, every bar keeps the lane it ends up in the whole way, overlapping for a
 	// moment rather than opening lanes that would be empty again at the end: the layout where the
@@ -244,6 +247,7 @@ export function ActivityTimeline({
 												top={barTop(laneIndex)}
 												height={BAR_H}
 												connections={connections}
+												tooltip={requestTooltip}
 												forTask={(entry) =>
 													bar.tasks.length === 1 && entry.taskId === bar.tasks[0]?.id
 														? null
@@ -261,6 +265,7 @@ export function ActivityTimeline({
 				</div>
 			</div>
 			<ChartLegend rows={rows.flatMap((row) => row.row?.lanes.flat() ?? [])} />
+			<RequestTooltip handle={requestTooltip} connections={connections} />
 		</div>
 	);
 }

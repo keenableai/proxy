@@ -8,10 +8,12 @@ import {
 	Shimmer,
 	RequestMarks,
 	RequestTargets,
+	RequestTooltip,
 	TaskNames,
 	TaskTooltip,
 	Track,
 } from '@/components/timeline-chart';
+import {useRequestTooltip} from '@/hooks/use-request-tooltip';
 import {useChartWidth} from '@/hooks/use-chart-width';
 import {useOrgSlug} from '@/hooks/use-org';
 import {backFrom} from '@/lib/back';
@@ -69,6 +71,7 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 	const [active, setActive] = useState<string | null>(null);
 	const [measure, width] = useChartWidth();
 	const hatch = useId();
+	const requestTooltip = useRequestTooltip();
 	// Laid out again only where what it shows changes, not as the pointer moves over it.
 	const timeline = useMemo(
 		() => buildRunTimeline(tasks, entries, new Date(now), width, {expanded}),
@@ -219,6 +222,7 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 										top={index * ROW_H + TRACK_TOP}
 										height={TRACK_H}
 										connections={connections}
+										tooltip={requestTooltip}
 										forTask={(entry) =>
 											row.kind === 'task' && entry.taskId === row.id ? null : titleOf(entry.taskId)
 										}
@@ -248,6 +252,7 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 				</div>
 			</div>
 			<ChartLegend rows={timeline.rows} />
+			<RequestTooltip handle={requestTooltip} connections={connections} />
 		</div>
 	);
 }

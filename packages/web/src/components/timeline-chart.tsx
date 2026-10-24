@@ -1,4 +1,5 @@
 import {type ReactNode, useId} from 'react';
+import type {RequestTooltipHandle} from '@/hooks/use-request-tooltip';
 import {connectionLabel, describeEntry, locateEntry} from '@/lib/access';
 import {formatTime} from '@/lib/format';
 import {
@@ -233,13 +234,43 @@ export function TaskTooltip({
 	);
 }
 
-// A hit target over a request's stretch of the track, in the layer over the chart: on hover, what
-// it was, where and how long it took, and why it didn't go through; a click opens it in full.
+/**
+ * A chart's one tooltip for its requests, saying of the one under the pointer what it was, where
+ * and how long it took, and why it didn't go through: one for them all, rather than one each, as
+ * a chart has a target for every request and draws them all again as the window moves.
+ */
+export function RequestTooltip({
+	handle,
+	connections,
+}: {
+	handle: RequestTooltipHandle;
+	connections: Connection[];
+}) {
+	return (
+		<Tooltip handle={handle} disableHoverablePopup>
+			{({payload}) =>
+				payload && (
+					<TooltipContent className="pointer-events-none max-w-xs">
+						<RequestDetails
+							entry={payload.entry}
+							connections={connections}
+							forTask={payload.forTask}
+						/>
+					</TooltipContent>
+				)
+			}
+		</Tooltip>
+	);
+}
+
+// A hit target over a request's stretch of the track, in the layer over the chart: on hover, the
+// chart's request tooltip says what it was; a click opens it in full.
 function RequestTarget({
 	request,
 	top,
 	height,
 	connections,
+	tooltip,
 	forTask,
 	onOpen,
 }: {
@@ -247,6 +278,7 @@ function RequestTarget({
 	top: number;
 	height: number;
 	connections: Connection[];
+	tooltip: RequestTooltipHandle;
 	// The task it was made for, where that is one rolled into the row's.
 	forTask: string | null;
 	onOpen: () => void;
@@ -261,22 +293,19 @@ function RequestTarget({
 	);
 	const left = (request.start + request.end - width) / 2;
 	return (
-		<Tooltip disableHoverablePopup>
-			<TooltipTrigger
-				render={
-					<button
-						type="button"
-						onClick={onOpen}
-						aria-label={describeEntry(entry, located)}
-						className="absolute cursor-pointer rounded-sm transition-[top] duration-300 ease-in-out hover:bg-foreground/10 focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none"
-						style={{left, top, width, height}}
-					/>
-				}
-			/>
-			<TooltipContent className="pointer-events-none max-w-xs">
-				<RequestDetails entry={entry} connections={connections} forTask={forTask} />
-			</TooltipContent>
-		</Tooltip>
+		<TooltipTrigger
+			handle={tooltip}
+			payload={{entry, forTask}}
+			render={
+				<button
+					type="button"
+					onClick={onOpen}
+					aria-label={describeEntry(entry, located)}
+					className="absolute cursor-pointer rounded-sm transition-[top] duration-300 ease-in-out hover:bg-foreground/10 focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none"
+					style={{left, top, width, height}}
+				/>
+			}
+		/>
 	);
 }
 
@@ -320,6 +349,7 @@ export function RequestTargets({
 	top,
 	height,
 	connections,
+	tooltip,
 	forTask,
 	onOpen,
 }: {
@@ -327,6 +357,7 @@ export function RequestTargets({
 	top: number;
 	height: number;
 	connections: Connection[];
+	tooltip: RequestTooltipHandle;
 	// The task a request was made for, where that is one rolled into the row's.
 	forTask: (entry: AuditEntry) => string | null;
 	onOpen: (entry: AuditEntry) => void;
@@ -345,6 +376,7 @@ export function RequestTargets({
 						top={top}
 						height={height}
 						connections={connections}
+						tooltip={tooltip}
 						forTask={forTask(request.entry)}
 						onOpen={() => onOpen(request.entry)}
 					/>
