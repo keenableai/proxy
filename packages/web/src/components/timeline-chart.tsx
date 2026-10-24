@@ -253,8 +253,6 @@ function RequestTarget({
 }) {
 	const {entry} = request;
 	const located = locateEntry(connections, entry);
-	const where = located ? connectionLabel(connections, located.connection) : 'Deleted connection';
-	const duration = entry.durationMs === null ? null : formatDuration(entry.durationMs);
 	// One that didn't go through is always pointed at, so its target is never narrower than the
 	// least, centred on its stretch.
 	const width = Math.max(
@@ -276,18 +274,37 @@ function RequestTarget({
 				}
 			/>
 			<TooltipContent className="pointer-events-none max-w-xs">
-				<span className="flex flex-col gap-1">
-					<span className="font-medium">{describeEntry(entry, located)}</span>
-					<span className="opacity-80">
-						{where} · {formatTime(entry.at)}
-						{duration && ` · ${duration}`}
-					</span>
-					{forTask && <span className="opacity-80">For “{forTask}”</span>}
-					{entry.outcome === 'denied' && <span>Blocked: the agent may not do this</span>}
-					{entry.outcome === 'failed' && <span>Failed{entry.error ? `: ${entry.error}` : ''}</span>}
-				</span>
+				<RequestDetails entry={entry} connections={connections} forTask={forTask} />
 			</TooltipContent>
 		</Tooltip>
+	);
+}
+
+// What a request's tooltip says, worked out only once it is open: a timeline has a target for
+// every request, and draws them all again as the window moves.
+function RequestDetails({
+	entry,
+	connections,
+	forTask,
+}: {
+	entry: AuditEntry;
+	connections: Connection[];
+	forTask: string | null;
+}) {
+	const located = locateEntry(connections, entry);
+	const where = located ? connectionLabel(connections, located.connection) : 'Deleted connection';
+	const duration = entry.durationMs === null ? null : formatDuration(entry.durationMs);
+	return (
+		<span className="flex flex-col gap-1">
+			<span className="font-medium">{describeEntry(entry, located)}</span>
+			<span className="opacity-80">
+				{where} · {formatTime(entry.at)}
+				{duration && ` · ${duration}`}
+			</span>
+			{forTask && <span className="opacity-80">For “{forTask}”</span>}
+			{entry.outcome === 'denied' && <span>Blocked: the agent may not do this</span>}
+			{entry.outcome === 'failed' && <span>Failed{entry.error ? `: ${entry.error}` : ''}</span>}
+		</span>
 	);
 }
 

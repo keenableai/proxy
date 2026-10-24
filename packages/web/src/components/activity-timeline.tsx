@@ -524,17 +524,7 @@ function BarTarget({
 					}
 				/>
 				<TooltipContent className="pointer-events-none max-w-xs">
-					<span className="flex flex-col gap-1">
-						<span className="font-medium">{bar.tasks.length} tasks close together</span>
-						<span className="opacity-80">
-							{[
-								`${STATUS_LABEL[bar.status]} · ${formatDuration(bar.durationMs)}`,
-								...requestSummary(bar.requests),
-							].join(' · ')}
-						</span>
-						<TaskNames tasks={bar.tasks} />
-						<span>Click to zoom in on them</span>
-					</span>
+					<ClusterDetails bar={bar} />
 				</TooltipContent>
 			</Tooltip>
 		);
@@ -563,5 +553,22 @@ function BarTarget({
 				/>
 			</TooltipContent>
 		</Tooltip>
+	);
+}
+
+// What a bar of several tasks says on hover, worked out only once it is open.
+function ClusterDetails({bar}: {bar: ActivityBar}) {
+	return (
+		<span className="flex flex-col gap-1">
+			<span className="font-medium">{bar.tasks.length} tasks close together</span>
+			<span className="opacity-80">
+				{[
+					`${STATUS_LABEL[bar.status]} · ${formatDuration(bar.durationMs)}`,
+					...requestSummary(bar.requests),
+				].join(' · ')}
+			</span>
+			<TaskNames tasks={bar.tasks} />
+			<span>Click to zoom in on them</span>
+		</span>
 	);
 }

@@ -389,18 +389,7 @@ function RowTarget({
 					}
 				/>
 				<TooltipContent className="pointer-events-none max-w-xs">
-					<span className="flex flex-col gap-1">
-						<span className="font-medium">
-							{row.tasks.length} tasks handed on one after another
-						</span>
-						<span className="opacity-80">
-							{[
-								`${STATUS_LABEL[row.status]} · ${formatDuration(row.durationMs)}`,
-								...requestSummary(row.requests),
-							].join(' · ')}
-						</span>
-						<TaskNames tasks={row.tasks} />
-					</span>
+					<GroupDetails row={row} />
 				</TooltipContent>
 			</Tooltip>
 		);
@@ -602,5 +591,21 @@ function BreakTarget({gap, height}: {gap: RunBreak; height: number}) {
 				</span>
 			</TooltipContent>
 		</Tooltip>
+	);
+}
+
+// What a group row says on hover, worked out only once it is open.
+function GroupDetails({row}: {row: RunRow}) {
+	return (
+		<span className="flex flex-col gap-1">
+			<span className="font-medium">{row.tasks.length} tasks handed on one after another</span>
+			<span className="opacity-80">
+				{[
+					`${STATUS_LABEL[row.status]} · ${formatDuration(row.durationMs)}`,
+					...requestSummary(row.requests),
+				].join(' · ')}
+			</span>
+			<TaskNames tasks={row.tasks} />
+		</span>
 	);
 }
