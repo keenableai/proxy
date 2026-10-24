@@ -8,7 +8,7 @@ import type {Window} from '@/lib/activity-timeline';
 import {useOrgSlug} from '@/hooks/use-org';
 import {
 	DEFAULT_MINUTES,
-	endedAt,
+	endsOf,
 	LOADED_MINUTES,
 	MAX_MINUTES,
 	MIN_MINUTES,
@@ -292,24 +292,8 @@ export function AgentTimeline({
 	// When each task ended, or now while it is under way, worked out once for every window.
 	const endsAt = useMemo(() => {
 		const now = new Date(answer.now);
-		const own = new Map<string, AuditEntry[]>();
-		for (const entry of answer.entries) {
-			if (entry.taskId === null) {
-				continue;
-			}
-			const known = own.get(entry.taskId);
-			if (known) {
-				known.push(entry);
-				continue;
-			}
-			own.set(entry.taskId, [entry]);
-		}
-		return new Map(
-			answer.tasks.map((task) => [
-				task.id,
-				(endedAt(task, own.get(task.id) ?? [], now) ?? now).getTime(),
-			]),
-		);
+		const ends = endsOf(answer.tasks, answer.entries, now);
+		return new Map(answer.tasks.map((task) => [task.id, (ends.get(task.id) ?? now).getTime()]));
 	}, [answer]);
 
 	// Nothing in the past day, or further back where the window reaches: nothing to show at all.

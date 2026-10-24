@@ -8,7 +8,7 @@ import {
 	stepFor,
 	type TimelineRequest,
 } from '@/lib/timeline';
-import {endedAt, type TaskStatus, taskStatus} from '@/lib/timeline-window';
+import {endsOf, type TaskStatus, taskStatus} from '@/lib/timeline-window';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
 
 // A task's run on its page: how it went, as a tree of tasks over time. Agents work through
@@ -256,8 +256,8 @@ export function buildRunTimeline(
 		}
 		ofTask.set(entry.taskId, [entry]);
 	}
-	const endOf = (task: ActivityTask) =>
-		(endedAt(task, ofTask.get(task.id) ?? [], now) ?? now).getTime();
+	const ends = endsOf(tasks, entries, now);
+	const endOf = (task: ActivityTask) => (ends.get(task.id) ?? now).getTime();
 	const origin = Math.min(...tasks.map((task) => time(task.startedAt)));
 	const running = tasks.some((task) => taskStatus(task, now) === 'running');
 	const lastActive = Math.max(

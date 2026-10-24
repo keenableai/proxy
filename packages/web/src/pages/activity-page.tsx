@@ -164,15 +164,15 @@ function TaskCard({
 	);
 }
 
-// Finished once the agent says so; one it never finished is taken as given up a day after it
-// started (@proxy/utils/tasks).
+// Finished once the agent says so; one it never finished is taken as given up a day after it or the
+// last of its sub-tasks started (@proxy/utils/tasks).
 function TaskBadge({task}: {task: ActivityTask}) {
 	// When the page was opened, as the log's entries are.
 	const [now] = useState(() => new Date());
 	if (task.finishedAt) {
 		return <Badge variant="secondary">Finished</Badge>;
 	}
-	const ended = taskEndedAt({startedAt: new Date(task.startedAt), finishedAt: null}, now);
+	const ended = taskEndedAt({lastStartedAt: new Date(task.lastStartedAt), finishedAt: null}, now);
 	if (ended) {
 		return <Badge variant="secondary">Abandoned</Badge>;
 	}

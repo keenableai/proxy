@@ -74,8 +74,8 @@ function describeMinutes(minutes: number): string {
 	return hours % 24 === 0 ? `${days}d` : `${days}d ${hours % 24}h`;
 }
 
-// A task is running until the agent calls it finished, or until a day after it started, when one
-// never finished is taken as abandoned (@proxy/utils/tasks).
+// A task is running until the agent calls it finished, or until a day after it or the last of its
+// sub-tasks started, when one never finished is taken as abandoned (@proxy/utils/tasks).
 export type TaskStatus = 'running' | 'finished' | 'abandoned';
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -84,36 +84,83 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
 	abandoned: 'Abandoned',
 };
 
-// When it was started and finished, all a task's status needs.
-type TaskTimes = Pick<ActivityTask, 'startedAt' | 'finishedAt'>;
+// When it and the last of its sub-tasks were started and when it was finished, all a task's status
+// needs.
+type TaskTimes = Pick<ActivityTask, 'startedAt' | 'lastStartedAt' | 'finishedAt'>;
 
-// When the task was given up on, if it has been by `now`: a day after it started, never finished
-// (@proxy/utils/tasks); null while it is under way, or where it was finished.
+// When the task was given up on, if it has been by `now`: a day after it or the last of its
+// sub-tasks started, never finished (@proxy/utils/tasks); null while it is under way, or where it
+// was finished.
 function abandonedAt(task: TaskTimes, now: Date): Date | null {
 	if (task.finishedAt !== null) {
 		return null;
 	}
-	return taskEndedAt({startedAt: new Date(task.startedAt), finishedAt: null}, now);
+	return taskEndedAt({lastStartedAt: new Date(task.lastStartedAt), finishedAt: null}, now);
 }
 
+// A task with what it was handed on from, all its end needs.
+type TaskInTree = TaskTimes & Pick<ActivityTask, 'id' | 'parentId'>;
+
 /**
- * When the task ended, if it has by `now`: when it was finished; or, given up on, when the last
- * of `requests`, those made for it, was done, or when it started where none was made, since
- * nothing was done for it after. Null while it is under way.
+ * When each of `tasks` ended, if it has by `now`: when it was finished; or, given up on, when the
+ * last of `entries` made for it was done or the last of its sub-tasks ended, or when it started
+ * where there was neither, since nothing was done for it after. Null while it is under way.
  */
-export function endedAt(task: TaskTimes, requests: AuditEntry[], now: Date): Date | null {
-	if (task.finishedAt !== null) {
-		return new Date(task.finishedAt);
+export function endsOf(
+	tasks: TaskInTree[],
+	entries: AuditEntry[],
+	now: Date,
+): Map<string, Date | null> {
+	const lastRequest = new Map<string, number>();
+	for (const entry of entries) {
+		if (entry.taskId === null) {
+			continue;
+		}
+		const done = requestTimes(entry).to;
+		lastRequest.set(entry.taskId, Math.max(lastRequest.get(entry.taskId) ?? done, done));
 	}
-	if (abandonedAt(task, now) === null) {
-		return null;
+	const children = new Map<string, TaskInTree[]>();
+	for (const task of tasks) {
+		if (task.parentId === null) {
+			continue;
+		}
+		const siblings = children.get(task.parentId);
+		if (siblings) {
+			siblings.push(task);
+			continue;
+		}
+		children.set(task.parentId, [task]);
 	}
-	return new Date(
-		Math.max(
-			new Date(task.startedAt).getTime(),
-			...requests.map((request) => requestTimes(request).to),
-		),
-	);
+	const ends = new Map<string, Date | null>();
+	const endOf = (task: TaskInTree): Date | null => {
+		if (ends.has(task.id)) {
+			return ends.get(task.id) ?? null;
+		}
+		const end = ownEnd(task);
+		ends.set(task.id, end);
+		return end;
+	};
+	const ownEnd = (task: TaskInTree): Date | null => {
+		if (task.finishedAt !== null) {
+			return new Date(task.finishedAt);
+		}
+		if (abandonedAt(task, now) === null) {
+			return null;
+		}
+		const started = new Date(task.startedAt).getTime();
+		// A sub-task is abandoned no later than its parent (@proxy/utils/tasks), so each has ended.
+		return new Date(
+			Math.max(
+				started,
+				lastRequest.get(task.id) ?? started,
+				...(children.get(task.id) ?? []).map((child) => endOf(child)?.getTime() ?? started),
+			),
+		);
+	};
+	for (const task of tasks) {
+		endOf(task);
+	}
+	return ends;
 }
 
 export function taskStatus(task: TaskTimes, now: Date): TaskStatus {

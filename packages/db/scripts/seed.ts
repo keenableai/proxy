@@ -748,6 +748,11 @@ const JOB: JobPart = {
 	],
 };
 
+// When the part, or the last of the parts it handed on at any depth, started, in minutes.
+function lastStart(part: JobPart): number {
+	return Math.max(part.from, ...(part.parts ?? []).map(lastStart));
+}
+
 async function seedJob(agent: (typeof agents)[number], startedAt: number): Promise<number> {
 	let last = startedAt;
 	let refused = false;
@@ -765,6 +770,7 @@ async function seedJob(agent: (typeof agents)[number], startedAt: number): Promi
 				goal: part.goal,
 				via,
 				createdAt: new Date(at(part.from)),
+				lastStartedAt: new Date(at(lastStart(part))),
 				finishedAt: new Date(at(part.to)),
 				outcome: part.outcome,
 			},
@@ -863,6 +869,7 @@ for (const agent of agents) {
 						...pick(TASKS),
 						via: taskVia,
 						createdAt: new Date(startedAt),
+						lastStartedAt: new Date(startedAt),
 						finishedAt: finishedAt === null ? null : new Date(finishedAt),
 					},
 				});
@@ -877,6 +884,7 @@ for (const agent of agents) {
 			task ? [task] : [],
 		)) {
 			const parentDone = parent.endsAt !== now;
+			let lastStartedAt = parent.startedAt;
 			for (const [index, part] of SUB_TASKS.entries()) {
 				const startedAt = parent.startedAt + (2 + index * 3 + random() * 2) * MINUTE;
 				const finishedAt =
@@ -891,13 +899,19 @@ for (const agent of agents) {
 						goal: part.goal,
 						via: parent.via,
 						createdAt: new Date(startedAt),
+						lastStartedAt: new Date(startedAt),
 						finishedAt: finishedAt === null ? null : new Date(finishedAt),
 						outcome: finishedAt === null ? null : part.outcome,
 					},
 				});
 				taskCount += 1;
 				subTasks.push({id: task.id, via: parent.via, startedAt, endsAt: finishedAt ?? now});
+				lastStartedAt = Math.max(lastStartedAt, startedAt);
 			}
+			await db.agentTask.update({
+				where: {id: parent.id},
+				data: {lastStartedAt: new Date(lastStartedAt)},
+			});
 		}
 		const pool = [...concurrent, ...subTasks];
 		for (const [index, {request: picked}] of recent.entries()) {
@@ -955,6 +969,7 @@ for (const agent of agents) {
 					...pick(TASKS),
 					via,
 					createdAt: new Date(createdAt - MINUTE),
+					lastStartedAt: new Date(createdAt - MINUTE),
 					finishedAt: new Date((requests[lastIndex]?.createdAt ?? createdAt) + MINUTE),
 				},
 			});

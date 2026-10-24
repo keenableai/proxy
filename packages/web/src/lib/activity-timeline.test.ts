@@ -18,6 +18,8 @@ function task(overrides: Partial<ActivityTask>): ActivityTask {
 		startedAt: '2026-10-16T11:00:00Z',
 		finishedAt: null,
 		outcome: null,
+		// No sub-task started after it, unless a test gives one.
+		lastStartedAt: overrides.startedAt ?? '2026-10-16T11:00:00Z',
 		...overrides,
 	};
 }

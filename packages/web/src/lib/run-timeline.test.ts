@@ -17,6 +17,8 @@ function task(overrides: Partial<ActivityTask>): ActivityTask {
 		startedAt: '2026-10-16T09:00:00Z',
 		finishedAt: null,
 		outcome: null,
+		// No sub-task started after it, unless a test gives one.
+		lastStartedAt: overrides.startedAt ?? '2026-10-16T09:00:00Z',
 		...overrides,
 	};
 }
@@ -271,6 +273,28 @@ describe('buildRunTimeline', () => {
 		expect(row?.status).toBe('running');
 		expect(row?.end).toBe(WIDTH);
 		expect(row?.durationMs).toBe(5 * MINUTE);
+	});
+
+	test('a task given up on runs until the last thing done for it or what it handed on', () => {
+		const parent = task({
+			id: 'parent',
+			startedAt: '2026-10-15T07:00:00Z',
+			lastStartedAt: '2026-10-15T08:00:00Z',
+		});
+		const sub = task({id: 'sub', parentId: 'parent', startedAt: '2026-10-15T08:00:00Z'});
+		const timeline = buildRunTimeline(
+			[parent, sub],
+			[
+				entry({id: 'own', taskId: 'parent', at: '2026-10-15T07:10:00Z'}),
+				entry({id: 'handed', taskId: 'sub', at: '2026-10-15T08:30:00Z'}),
+			],
+			now,
+			WIDTH,
+		);
+		const row = timeline.rows.find((candidate) => candidate.id === 'parent');
+		expect(row?.status).toBe('abandoned');
+		expect(row?.durationMs).toBe(90 * MINUTE);
+		expect(row?.end).toBe(WIDTH);
 	});
 
 	test('with nothing under way, the axis ends at the last thing done', () => {

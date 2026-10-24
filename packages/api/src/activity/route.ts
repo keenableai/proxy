@@ -57,10 +57,13 @@ export type ActivityTaskResponse = {
 	finishedAt: string | null;
 	// What was done or found, as the agent said when it finished; null where it said nothing.
 	outcome: string | null;
+	// When it, or the last of its sub-tasks at any depth, was started: one never finished is taken
+	// as abandoned a day after (@proxy/utils/tasks).
+	lastStartedAt: string;
 };
 
-function toActivityTask({createdAt, finishedAt, ...task}: AgentTaskRow): ActivityTaskResponse {
-	return {...task, startedAt: createdAt.toISOString(), finishedAt: finishedAt?.toISOString() ?? null};
+function toActivityTask({createdAt, finishedAt, lastStartedAt, ...task}: AgentTaskRow): ActivityTaskResponse {
+	return {...task, startedAt: createdAt.toISOString(), finishedAt: finishedAt?.toISOString() ?? null, lastStartedAt: lastStartedAt.toISOString()};
 }
 
 // `?agentId=proxy` is what Personal Agent Proxy did itself.
@@ -198,8 +201,7 @@ export function handleActivityTimelineRoute(request: AuthenticatedRequest): Prom
 				MAX_TIMELINE_SUB_TASKS,
 			),
 		);
-		// A task of its own may also be under another, where the one between them wasn't under way.
-		const tasks = [...new Map([...tops, ...subTasks].map((task) => [task.id, task])).values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+		const tasks = [...tops, ...subTasks].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 		const rows = $(
 			await listTaskEntries(
 				viewer,

@@ -50,6 +50,7 @@ describe('handleActivityTimelineRoute', () => {
 			createdAt: new Date('2026-10-15T20:00:00Z'),
 			finishedAt: null,
 			outcome: null,
+			lastStartedAt: new Date('2026-10-15T20:00:00Z'),
 		};
 		const entry = {
 			id: 'entry-1',
@@ -92,6 +93,7 @@ describe('handleActivityTimelineRoute', () => {
 					startedAt: '2026-10-15T20:00:00.000Z',
 					finishedAt: null,
 					outcome: null,
+					lastStartedAt: '2026-10-15T20:00:00.000Z',
 				},
 			],
 			entries: [{...fields, at: createdAt.toISOString(), userName: null}],
@@ -108,7 +110,7 @@ describe('handleActivityTimelineRoute', () => {
 		expect(bad.unwrapErr().kind).toBe('parse_error');
 	});
 
-	test('reads a stretch of time ending before now, with the sub-tasks of its tasks, each once', async () => {
+	test('reads a stretch of time ending before now, with the sub-tasks of its tasks', async () => {
 		const task = (id: string, parentId: string | null, createdAt: string) => ({
 			id,
 			agentId: 'agent-1',
@@ -119,22 +121,22 @@ describe('handleActivityTimelineRoute', () => {
 			createdAt: new Date(createdAt),
 			finishedAt: null,
 			outcome: null,
+			lastStartedAt: new Date(createdAt),
 		});
 		const notes = task('notes', null, '2026-10-01T10:00:00Z');
-		// Under a sub-task that was no longer under way, so read on its own too.
-		const left = task('left', 'sub', '2026-10-01T10:20:00Z');
-		listAgentTasksBetween.mockResolvedValue(Ok([left, notes]));
-		listSubTasks.mockResolvedValue(Ok([task('sub', 'notes', '2026-10-01T10:10:00Z'), left]));
+		const pricing = task('pricing', null, '2026-10-01T10:20:00Z');
+		listAgentTasksBetween.mockResolvedValue(Ok([pricing, notes]));
+		listSubTasks.mockResolvedValue(Ok([task('sub', 'notes', '2026-10-01T10:10:00Z')]));
 		listTaskEntries.mockResolvedValue(Ok([]));
 		const {handleActivityTimelineRoute} = await import('./route');
 		const result = await handleActivityTimelineRoute(makeRequest({from: '2026-10-01T00:00:00Z', to: '2026-10-02T00:00:00Z'}) as never);
 
 		const viewer = expect.objectContaining({orgId: 'org-1', userId: 'user-1'});
 		expect(listAgentTasksBetween).toHaveBeenCalledWith(viewer, new Date('2026-10-01T00:00:00Z'), new Date('2026-10-02T00:00:00Z'), 200);
-		expect(listSubTasks).toHaveBeenCalledWith(viewer, ['left', 'notes'], 1000);
-		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['left', 'sub', 'notes'], 2000, new Date('2026-10-01T00:00:00Z'));
+		expect(listSubTasks).toHaveBeenCalledWith(viewer, ['pricing', 'notes'], 1000);
+		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['pricing', 'sub', 'notes'], 2000, new Date('2026-10-01T00:00:00Z'));
 		expect(result.unwrap().to).toBe('2026-10-02T00:00:00.000Z');
-		expect(result.unwrap().tasks.map((one) => one.id)).toEqual(['left', 'sub', 'notes']);
+		expect(result.unwrap().tasks.map((one) => one.id)).toEqual(['pricing', 'sub', 'notes']);
 	});
 });
 
@@ -184,6 +186,7 @@ describe('handleListActivityRoute', () => {
 					createdAt: new Date('2026-10-15T09:00:00Z'),
 					finishedAt: new Date('2026-10-15T09:30:00Z'),
 					outcome: 'Archived 12 newsletters',
+					lastStartedAt: new Date('2026-10-15T09:00:00Z'),
 				},
 			]),
 		);
@@ -240,6 +243,7 @@ describe('handleListActivityRoute', () => {
 					startedAt: '2026-10-15T09:00:00.000Z',
 					finishedAt: '2026-10-15T09:30:00.000Z',
 					outcome: 'Archived 12 newsletters',
+					lastStartedAt: '2026-10-15T09:00:00.000Z',
 				},
 			],
 		});
@@ -257,6 +261,7 @@ describe('handleTaskRunRoute', () => {
 		createdAt: new Date(start),
 		finishedAt: finish === null ? null : new Date(finish),
 		outcome: null,
+		lastStartedAt: new Date(start),
 	});
 	// Notes, with a sub-task and one under that; calendar, handed on from a task the person does not see.
 	const notes = task('notes', '2026-10-15T20:11:00Z', null);

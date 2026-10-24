@@ -1,7 +1,7 @@
 import {describe, expect, test} from 'bun:test';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
 import {
-	endedAt,
+	endsOf,
 	gridlines,
 	presetOf,
 	taskStatus,
@@ -24,6 +24,8 @@ function task(overrides: Partial<ActivityTask>): ActivityTask {
 		finishedAt: null,
 		parentId: null,
 		outcome: null,
+		// No sub-task started after it, unless a test gives one.
+		lastStartedAt: overrides.startedAt ?? '2026-10-16T11:30:00Z',
 		...overrides,
 	};
 }
@@ -35,10 +37,16 @@ describe('taskStatus', () => {
 		expect(taskStatus(task({startedAt: '2026-10-15T12:00:01Z'}), now)).toBe('running');
 		expect(taskStatus(task({startedAt: '2026-10-15T12:00:00Z'}), now)).toBe('abandoned');
 	});
+
+	test('a task started over a day ago runs on while a sub-task of it started within the day', () => {
+		const parent = {startedAt: '2026-10-15T09:00:00Z', lastStartedAt: '2026-10-15T14:00:00Z'};
+		expect(taskStatus(task(parent), now)).toBe('running');
+		expect(taskStatus(task(parent), new Date('2026-10-16T14:00:00Z'))).toBe('abandoned');
+	});
 });
 
-describe('endedAt', () => {
-	const request = (at: string, durationMs = 0): AuditEntry => ({
+describe('endsOf', () => {
+	const request = (at: string, taskId = 't1'): AuditEntry => ({
 		id: `e-${at}`,
 		at,
 		agentId: 'a1',
@@ -50,25 +58,58 @@ describe('endedAt', () => {
 		outcome: 'allowed',
 		error: null,
 		via: 'mcp',
-		taskId: 't1',
-		durationMs,
+		taskId,
+		durationMs: 0,
 		userId: null,
 		userName: null,
 	});
 
 	test('a finished task ended when it was finished, and one under way has not ended', () => {
-		expect(endedAt(task({finishedAt: '2026-10-16T11:58:00Z'}), [], now)).toEqual(
-			new Date('2026-10-16T11:58:00Z'),
-		);
-		expect(endedAt(task({}), [request('2026-10-16T11:30:00Z')], now)).toBeNull();
+		const finished = task({id: 'done', finishedAt: '2026-10-16T11:58:00Z'});
+		const ends = endsOf([finished, task({})], [request('2026-10-16T11:30:00Z')], now);
+		expect(ends.get('done')).toEqual(new Date('2026-10-16T11:58:00Z'));
+		expect(ends.get('t1')).toBeNull();
 	});
 
 	test('an abandoned task ended when its last request was done, or when it started with none', () => {
 		const abandoned = task({startedAt: '2026-10-15T09:00:00Z'});
-		expect(
-			endedAt(abandoned, [request('2026-10-15T09:10:00Z'), request('2026-10-15T09:40:00Z')], now),
-		).toEqual(new Date('2026-10-15T09:40:00Z'));
-		expect(endedAt(abandoned, [], now)).toEqual(new Date('2026-10-15T09:00:00Z'));
+		const requests = [request('2026-10-15T09:10:00Z'), request('2026-10-15T09:40:00Z')];
+		expect(endsOf([abandoned], requests, now).get('t1')).toEqual(new Date('2026-10-15T09:40:00Z'));
+		expect(endsOf([abandoned], [], now).get('t1')).toEqual(new Date('2026-10-15T09:00:00Z'));
+	});
+
+	test('an abandoned task ended no earlier than the last of its sub-tasks, at any depth', () => {
+		const parent = task({
+			id: 'groceries',
+			startedAt: '2026-10-15T07:00:00Z',
+			lastStartedAt: '2026-10-15T10:00:00Z',
+		});
+		const compare = task({
+			id: 'compare',
+			parentId: 'groceries',
+			startedAt: '2026-10-15T08:00:00Z',
+			finishedAt: '2026-10-15T08:45:00Z',
+		});
+		const slot = task({
+			id: 'slot',
+			parentId: 'groceries',
+			startedAt: '2026-10-15T09:00:00Z',
+			lastStartedAt: '2026-10-15T10:00:00Z',
+		});
+		const calendar = task({id: 'calendar', parentId: 'slot', startedAt: '2026-10-15T10:00:00Z'});
+		const ends = endsOf(
+			[parent, compare, slot, calendar],
+			[
+				request('2026-10-15T07:30:00Z', 'groceries'),
+				request('2026-10-15T09:05:00Z', 'slot'),
+				request('2026-10-15T10:20:00Z', 'calendar'),
+			],
+			now,
+		);
+		expect(ends.get('calendar')).toEqual(new Date('2026-10-15T10:20:00Z'));
+		expect(ends.get('slot')).toEqual(new Date('2026-10-15T10:20:00Z'));
+		expect(ends.get('compare')).toEqual(new Date('2026-10-15T08:45:00Z'));
+		expect(ends.get('groceries')).toEqual(new Date('2026-10-15T10:20:00Z'));
 	});
 });
 

@@ -12,7 +12,7 @@ import {NotFound} from '@/components/not-found';
 import {RunTimeline} from '@/components/run-timeline';
 import {useOrgSlug} from '@/hooks/use-org';
 import {backFrom, backOf} from '@/lib/back';
-import {endedAt, STATUS_LABEL, taskStatus} from '@/lib/timeline-window';
+import {endsOf, STATUS_LABEL, taskStatus} from '@/lib/timeline-window';
 import {counted, formatDateTime} from '@/lib/format';
 import {formatDuration, outcomeSummary} from '@/lib/timeline';
 import type {AgentLogin, AuditEntry, Connection} from '@/lib/types';
@@ -95,7 +95,8 @@ function TaskRunPage({
 	const status = taskStatus(task, now);
 	const agent = agents.find((candidate) => candidate.id === run.agentId);
 	const own = run.entries.filter((entry) => entry.taskId === task.id);
-	const ended = endedAt(task, own, now) ?? now;
+	// Given up on, it ended no earlier than what it handed on.
+	const ended = endsOf(run.tasks, run.entries, now).get(task.id) ?? now;
 	const summary = [
 		formatDuration(ended.getTime() - new Date(task.startedAt).getTime()),
 		counted(own.length, 'request'),

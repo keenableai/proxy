@@ -7,7 +7,7 @@ import {
 	timedRequests,
 	type TimelineRequest,
 } from '@/lib/timeline';
-import {endedAt, gridlines, type TaskStatus, taskStatus} from '@/lib/timeline-window';
+import {endsOf, gridlines, type TaskStatus, taskStatus} from '@/lib/timeline-window';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
 
 // The home page's timeline: who is doing what. Every agent has a row over a window of time
@@ -101,8 +101,8 @@ export function prepareActivityTimeline(
 		}
 		ofTask.set(entry.taskId, [entry]);
 	}
-	const endOf = (task: ActivityTask) =>
-		(endedAt(task, ofTask.get(task.id) ?? [], now) ?? now).getTime();
+	// A task's end takes in its sub-tasks', so a task of its own's is its whole tree's.
+	const ends = endsOf(allTasks, entries, now);
 	const ids = new Set(allTasks.map((task) => task.id));
 	// The tasks agents were given themselves, each with what it handed on rolled in.
 	const tops = allTasks.filter((task) => task.parentId === null || !ids.has(task.parentId));
@@ -124,11 +124,9 @@ export function prepareActivityTimeline(
 		const tree = [task, ...descendants(task)];
 		return {
 			task,
-			status: tree.some((one) => taskStatus(one, now) === 'running')
-				? 'running'
-				: taskStatus(task, now),
+			status: taskStatus(task, now),
 			fromMs: new Date(task.startedAt).getTime(),
-			toMs: Math.max(...tree.map(endOf)),
+			toMs: (ends.get(task.id) ?? now).getTime(),
 			requests: timedRequests(tree.flatMap((one) => ofTask.get(one.id) ?? [])),
 			subTasks: tree.length - 1,
 		};
