@@ -111,6 +111,14 @@ export function outcomeSummary(entries: AuditEntry[]): string[] {
 // A request is drawn at least this wide, so one done in a moment still shows.
 const MIN_REQUEST_PX = 2;
 
+// A request with when it ran (requestTimes), read from it once.
+export type TimedRequest = {entry: AuditEntry; from: number; to: number};
+
+/** Each of `entries` with when it ran, for laying them out again and again without reading the times each time. */
+export function timedRequests(entries: AuditEntry[]): TimedRequest[] {
+	return entries.map((entry) => ({entry, ...requestTimes(entry)}));
+}
+
 /**
  * The requests of `entries` laid along the chart by `px`, which maps a time to pixels, those that
  * ran outside `from` and `to` left out, in the order they came in.
@@ -121,14 +129,25 @@ export function layRequests(
 	from: number,
 	to: number,
 ): TimelineRequest[] {
-	return entries
-		.flatMap((entry) => {
-			const ran = requestTimes(entry);
+	return layTimedRequests(timedRequests(entries), px, from, to);
+}
+
+/** The requests, with when each ran, laid along the chart as layRequests lays them. */
+export function layTimedRequests(
+	requests: TimedRequest[],
+	px: (ms: number) => number,
+	from: number,
+	to: number,
+): TimelineRequest[] {
+	return requests
+		.flatMap((ran) => {
 			if (ran.to < from || ran.from > to) {
 				return [];
 			}
 			const start = px(Math.max(ran.from, from));
-			return [{entry, start, end: Math.max(px(Math.min(ran.to, to)), start + MIN_REQUEST_PX)}];
+			return [
+				{entry: ran.entry, start, end: Math.max(px(Math.min(ran.to, to)), start + MIN_REQUEST_PX)},
+			];
 		})
 		.sort((a, b) => a.start - b.start);
 }

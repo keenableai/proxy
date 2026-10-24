@@ -289,8 +289,9 @@ export function AgentTimeline({
 	// they do, and only says so once the window has rested a second.
 	const resting = useRested(`${minutes}:${end ?? ''}`);
 
-	// The requests made for each task, for when it ended.
-	const ofTask = useMemo(() => {
+	// When each task ended, or now while it is under way, worked out once for every window.
+	const endsAt = useMemo(() => {
+		const now = new Date(answer.now);
 		const own = new Map<string, AuditEntry[]>();
 		for (const entry of answer.entries) {
 			if (entry.taskId === null) {
@@ -303,8 +304,13 @@ export function AgentTimeline({
 			}
 			own.set(entry.taskId, [entry]);
 		}
-		return own;
-	}, [answer.entries]);
+		return new Map(
+			answer.tasks.map((task) => [
+				task.id,
+				(endedAt(task, own.get(task.id) ?? [], now) ?? now).getTime(),
+			]),
+		);
+	}, [answer]);
 
 	// Nothing in the past day, or further back where the window reaches: nothing to show at all.
 	// Scrolled back further than a day, what was read is the window's own stretch, which may be empty.
@@ -320,9 +326,7 @@ export function AgentTimeline({
 		if (new Date(task.startedAt).getTime() > window.to.getTime()) {
 			return false;
 		}
-		return (
-			(endedAt(task, ofTask.get(task.id) ?? [], now) ?? now).getTime() >= window.from.getTime()
-		);
+		return (endsAt.get(task.id) ?? now.getTime()) >= window.from.getTime();
 	});
 	const preset = presetOf(wholeMinutes);
 

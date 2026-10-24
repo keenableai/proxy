@@ -1,4 +1,12 @@
-import {formatDuration, layRequests, MINUTE, type Span, type TimelineRequest} from '@/lib/timeline';
+import {
+	formatDuration,
+	layTimedRequests,
+	MINUTE,
+	type Span,
+	type TimedRequest,
+	timedRequests,
+	type TimelineRequest,
+} from '@/lib/timeline';
 import {endedAt, gridlines, type TaskStatus, taskStatus} from '@/lib/timeline-window';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
 
@@ -61,24 +69,26 @@ export const CLUSTER_MIN_PX = 52;
 // The room a gridline's label takes, "23h 30m" with space around it.
 const LABEL_PX = 72;
 
-/**
- * The timeline of `tasks` over `window`, `width` pixels wide, as it stood at `now`: every agent's
- * row, the busiest first, over the tasks it was given that were under way in the window, each bar
- * in the lane `preferred` gives it where that is free, else the first that is. With `held`, a bar
- * keeps the lane `preferred` gives it even where another bar is there, the two overlapping, and no
- * lane is opened for one with no lane to keep: for the moment the view is zooming in on a bar, so
- * bars part along the way rather than hop lanes or open ones empty again at the end.
- */
-export function buildActivityTimeline(
+// A task an agent was given itself, with what it handed on rolled in: what doesn't change as the
+// window moves, worked out once for every window the timeline is laid out over.
+type RolledTask = {
+	task: ActivityTask;
+	status: TaskStatus;
+	fromMs: number;
+	toMs: number;
+	requests: TimedRequest[];
+	subTasks: number;
+};
+
+// The tasks of a timeline as they stood at `now`, ready to be laid out over any window.
+export type ActivityTasks = {now: Date; rolled: RolledTask[]};
+
+/** `tasks` and the requests made for them as they stood at `now`, each task with its sub-tasks rolled in. */
+export function prepareActivityTimeline(
 	allTasks: ActivityTask[],
 	entries: AuditEntry[],
 	now: Date,
-	window: Window,
-	width: number,
-	preferred: LanePreferences = new Map(),
-	held = false,
-): ActivityTimeline {
-	const time = (iso: string) => new Date(iso).getTime();
+): ActivityTasks {
 	const ofTask = new Map<string, AuditEntry[]>();
 	for (const entry of entries) {
 		if (entry.taskId === null) {
@@ -93,10 +103,6 @@ export function buildActivityTimeline(
 	}
 	const endOf = (task: ActivityTask) =>
 		(endedAt(task, ofTask.get(task.id) ?? [], now) ?? now).getTime();
-	const from = window.from.getTime();
-	const to = window.to.getTime();
-	const spanMs = Math.max(to - from, 1);
-	const px = (ms: number) => ((Math.min(Math.max(ms, from), to) - from) / spanMs) * width;
 	const ids = new Set(allTasks.map((task) => task.id));
 	// The tasks agents were given themselves, each with what it handed on rolled in.
 	const tops = allTasks.filter((task) => task.parentId === null || !ids.has(task.parentId));
@@ -114,34 +120,78 @@ export function buildActivityTimeline(
 	}
 	const descendants = (task: ActivityTask): ActivityTask[] =>
 		(children.get(task.id) ?? []).flatMap((child) => [child, ...descendants(child)]);
-	const bars = tops
-		.map((task): ActivityBar => {
-			const tree = [task, ...descendants(task)];
-			const start = time(task.startedAt);
-			const end = Math.max(...tree.map(endOf));
-			const span = {start: px(start), end: px(end)};
+	const rolled = tops.map((task): RolledTask => {
+		const tree = [task, ...descendants(task)];
+		return {
+			task,
+			status: tree.some((one) => taskStatus(one, now) === 'running')
+				? 'running'
+				: taskStatus(task, now),
+			fromMs: new Date(task.startedAt).getTime(),
+			toMs: Math.max(...tree.map(endOf)),
+			requests: timedRequests(tree.flatMap((one) => ofTask.get(one.id) ?? [])),
+			subTasks: tree.length - 1,
+		};
+	});
+	return {now, rolled};
+}
+
+/**
+ * The timeline of `tasks` over `window`, `width` pixels wide, as it stood at `now`: every agent's
+ * row, the busiest first, over the tasks it was given that were under way in the window, each bar
+ * in the lane `preferred` gives it where that is free, else the first that is. With `held`, a bar
+ * keeps the lane `preferred` gives it even where another bar is there, the two overlapping, and no
+ * lane is opened for one with no lane to keep: for the moment the view is zooming in on a bar, so
+ * bars part along the way rather than hop lanes or open ones empty again at the end.
+ */
+export function buildActivityTimeline(
+	allTasks: ActivityTask[],
+	entries: AuditEntry[],
+	now: Date,
+	window: Window,
+	width: number,
+	preferred: LanePreferences = new Map(),
+	held = false,
+): ActivityTimeline {
+	return layActivityTimeline(
+		prepareActivityTimeline(allTasks, entries, now),
+		window,
+		width,
+		preferred,
+		held,
+	);
+}
+
+/** The timeline of tasks prepared once (prepareActivityTimeline), over `window`, as buildActivityTimeline lays it out. */
+export function layActivityTimeline(
+	{now, rolled}: ActivityTasks,
+	window: Window,
+	width: number,
+	preferred: LanePreferences = new Map(),
+	held = false,
+): ActivityTimeline {
+	const from = window.from.getTime();
+	const to = window.to.getTime();
+	const spanMs = Math.max(to - from, 1);
+	const px = (ms: number) => ((Math.min(Math.max(ms, from), to) - from) / spanMs) * width;
+	const bars = rolled
+		.filter((one) => one.fromMs <= to && one.toMs >= from)
+		.map((one): ActivityBar => {
+			const span = {start: px(one.fromMs), end: px(one.toMs)};
 			return {
-				tasks: [task],
+				tasks: [one.task],
 				members: [span],
-				status: tree.some((one) => taskStatus(one, now) === 'running')
-					? 'running'
-					: taskStatus(task, now),
+				status: one.status,
 				...span,
-				fromMs: start,
-				toMs: end,
-				durationMs: end - start,
-				clippedStart: start < from,
-				clippedEnd: end > to,
-				requests: layRequests(
-					tree.flatMap((one) => ofTask.get(one.id) ?? []),
-					px,
-					from,
-					to,
-				),
-				subTasks: tree.length - 1,
+				fromMs: one.fromMs,
+				toMs: one.toMs,
+				durationMs: one.toMs - one.fromMs,
+				clippedStart: one.fromMs < from,
+				clippedEnd: one.toMs > to,
+				requests: layTimedRequests(one.requests, px, from, to),
+				subTasks: one.subTasks,
 			};
 		})
-		.filter((bar) => bar.fromMs <= to && bar.toMs >= from)
 		.sort((a, b) => a.fromMs - b.fromMs);
 	const agentIds = [...new Set(bars.map((bar) => bar.tasks[0]?.agentId ?? ''))];
 	const rows = agentIds.map((agentId): ActivityRow => {

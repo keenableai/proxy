@@ -19,11 +19,12 @@ import {
 	type ActivityBar,
 	type ActivityRow,
 	type ActivityTimeline as ActivityLayout,
-	buildActivityTimeline,
 	keyOf,
 	laneAssignments,
+	layActivityTimeline,
 	lanesEverywhere,
 	type LanePreferences,
+	prepareActivityTimeline,
 	type Window,
 } from '@/lib/activity-timeline';
 import {
@@ -105,6 +106,11 @@ export function ActivityTimeline({
 	const [measure, width] = useChartWidth();
 	const requestTooltip = useRequestTooltip();
 	const [preferred, setPreferred] = useState<LanePreferences>(() => new Map());
+	// What doesn't change as the window moves is worked out once for every window.
+	const prepared = useMemo(
+		() => prepareActivityTimeline(tasks, entries, new Date(now)),
+		[tasks, entries, now],
+	);
 	// Zooming in on a bar, every bar keeps the lane it ends up in the whole way, overlapping for a
 	// moment rather than opening lanes that would be empty again at the end: the layout where the
 	// zoom ends is made first, afresh, so its lanes are the fewest, and the lanes it gives go before
@@ -112,24 +118,14 @@ export function ActivityTimeline({
 	// What the zoom's way gives is the same on every frame of it, so it is laid out once.
 	const {final, lanes, laidAhead} = useMemo(() => {
 		const destination = ahead.at(-1);
-		const final = destination
-			? buildActivityTimeline(tasks, entries, new Date(now), destination, width)
-			: null;
+		const final = destination ? layActivityTimeline(prepared, destination, width) : null;
 		const lanes = final ? new Map([...preferred, ...lanesEverywhere(final)]) : preferred;
 		const laidAhead = ahead.map((coming) =>
-			buildActivityTimeline(tasks, entries, new Date(now), coming, width, lanes, true),
+			layActivityTimeline(prepared, coming, width, lanes, true),
 		);
 		return {final, lanes, laidAhead};
-	}, [tasks, entries, now, ahead, width, preferred]);
-	const timeline = buildActivityTimeline(
-		tasks,
-		entries,
-		new Date(now),
-		window,
-		width,
-		lanes,
-		final !== null,
-	);
+	}, [prepared, ahead, width, preferred]);
+	const timeline = layActivityTimeline(prepared, window, width, lanes, final !== null);
 	const rows = useSettledRows(timeline, laidAhead, window, preferred, setPreferred);
 	const titleOf = (taskId: string | null) =>
 		tasks.find((candidate) => candidate.id === taskId)?.title ?? null;
