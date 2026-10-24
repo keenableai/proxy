@@ -1,7 +1,14 @@
 import {describe, expect, test} from 'bun:test';
 import {HOUR, MINUTE, SECOND} from '@/lib/timeline';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
-import {BREAK_PX, buildAxis, buildRunTimeline, defaultExpanded, groupId} from './run-timeline';
+import {
+	BREAK_PX,
+	buildAxis,
+	buildRunTimeline,
+	defaultExpanded,
+	folded,
+	groupId,
+} from './run-timeline';
 
 const now = new Date('2026-10-16T09:10:00Z');
 const WIDTH = 600;
@@ -45,6 +52,16 @@ function entry(overrides: Partial<AuditEntry>): AuditEntry {
 }
 
 describe('buildAxis', () => {
+	test('moments a few milliseconds apart are not spread across the width', () => {
+		// Tasks starting at 0s, 1s, 1.01s and 10s, and nothing taking any time.
+		const axis = buildAxis(
+			10 * SECOND,
+			[0, 1000, 1010, 10 * SECOND].map((at) => ({start: at, end: at})),
+			800,
+		);
+		expect(axis.px(1010) - axis.px(1000)).toBeLessThan(20);
+	});
+
 	test('with something happening throughout, is linear and marked a round step apart', () => {
 		const axis = buildAxis(100 * SECOND, [{start: 0, end: 100 * SECOND}], WIDTH);
 		expect(axis.breaks).toEqual([]);
@@ -263,6 +280,40 @@ describe('buildRunTimeline', () => {
 			expanded: new Set(['parent', groupId(burst)]),
 		}).rows;
 		expect(apart.map((row) => row.id)).toEqual(['parent', 'a', 'b', 'c']);
+
+		// Folding the parent puts the group back together for when it is opened again.
+		const again = buildRunTimeline([parent, ...burst], entries, now, WIDTH, {
+			expanded: new Set([
+				...folded(new Set(['parent', groupId(burst)]), [parent, ...burst], 'parent'),
+				'parent',
+			]),
+		}).rows;
+		expect(again.map((row) => row.id)).toEqual(['parent', groupId(burst)]);
+	});
+
+	test('a group of tasks given up on is not handed back', () => {
+		const parent = task({
+			id: 'parent',
+			startedAt: '2026-10-14T09:00:00Z',
+			lastStartedAt: '2026-10-14T09:02:00Z',
+		});
+		const burst = ['a', 'b'].map((id, index) =>
+			task({
+				id,
+				parentId: 'parent',
+				startedAt: new Date(Date.parse('2026-10-14T09:01:00Z') + index * 3 * SECOND).toISOString(),
+			}),
+		);
+		// The parent busy throughout, so nothing is folded and the two are close together.
+		const entries = [
+			entry({id: 'p1', taskId: 'parent', at: '2026-10-14T09:05:00Z', durationMs: 5 * MINUTE}),
+		];
+		const rows = buildRunTimeline([parent, ...burst], entries, now, WIDTH, {
+			expanded: new Set(['parent']),
+		}).rows;
+		const group = rows.find((row) => row.kind === 'group');
+		expect(group?.status).toBe('abandoned');
+		expect(group?.handedBack).toBe(false);
 	});
 
 	test('a task still under way runs to the end of the axis, which is now', () => {

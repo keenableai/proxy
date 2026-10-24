@@ -1,6 +1,13 @@
 import {describe, expect, test} from 'bun:test';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
-import {buildActivityTimeline, laneAssignments, lanesEverywhere} from './activity-timeline';
+import {
+	type LanePreferences,
+	laneAssignments,
+	lanesEverywhere,
+	layActivityTimeline,
+	prepareActivityTimeline,
+	type Window,
+} from './activity-timeline';
 
 const now = new Date('2026-10-16T12:00:00Z');
 const WIDTH = 600;
@@ -45,7 +52,26 @@ function entry(overrides: Partial<AuditEntry>): AuditEntry {
 	};
 }
 
-describe('buildActivityTimeline', () => {
+// The tasks prepared and laid out over the window in one go, as the timeline does for each window.
+function build(
+	tasks: ActivityTask[],
+	entries: AuditEntry[],
+	at: Date,
+	over: Window,
+	width: number,
+	preferred?: LanePreferences,
+	held?: boolean,
+) {
+	return layActivityTimeline(
+		prepareActivityTimeline(tasks, entries, at),
+		over,
+		width,
+		preferred,
+		held,
+	);
+}
+
+describe('layActivityTimeline', () => {
 	const inbox = task({});
 	const call = task({
 		id: 't2',
@@ -63,13 +89,7 @@ describe('buildActivityTimeline', () => {
 
 	test('every agent’s row, those with a task under way first; tasks one after another share a lane, overlapping ones each take one', () => {
 		const overlapping = task({id: 't4', startedAt: '2026-10-16T11:30:00Z'});
-		const timeline = buildActivityTimeline(
-			[report, inbox, call, overlapping],
-			[],
-			now,
-			window,
-			WIDTH,
-		);
+		const timeline = build([report, inbox, call, overlapping], [], now, window, WIDTH);
 		expect(timeline.rows.map((row) => row.agentId)).toEqual(['a1', 'a2']);
 		expect(timeline.rows[0]?.working).toBe(2);
 		expect(timeline.rows[0]?.lanes.map((lane) => lane.map((bar) => bar.tasks[0]?.id))).toEqual([
@@ -80,7 +100,7 @@ describe('buildActivityTimeline', () => {
 	});
 
 	test('places each bar in the window, running on past its end while under way', () => {
-		const timeline = buildActivityTimeline([inbox, call], [], now, window, WIDTH);
+		const timeline = build([inbox, call], [], now, window, WIDTH);
 		const bars = timeline.rows[0]?.lanes[0] ?? [];
 		expect(bars.map((bar) => [bar.tasks[0]?.id, bar.start, bar.end, bar.status])).toEqual([
 			['t2', 200, 250, 'finished'],
@@ -93,7 +113,7 @@ describe('buildActivityTimeline', () => {
 	test('rolls a task’s sub-tasks into it, their requests on its bar, and counts them', () => {
 		const sub = task({id: 'sub', parentId: 't1', startedAt: '2026-10-16T11:10:00Z'});
 		const deeper = task({id: 'deeper', parentId: 'sub', startedAt: '2026-10-16T11:20:00Z'});
-		const timeline = buildActivityTimeline(
+		const timeline = build(
 			[inbox, sub, deeper],
 			[entry({}), entry({id: 'e2', taskId: 'deeper', at: '2026-10-16T11:21:00Z'})],
 			now,
@@ -117,7 +137,7 @@ describe('buildActivityTimeline', () => {
 			startedAt: '2026-10-16T05:00:00Z',
 			finishedAt: '2026-10-16T07:00:00Z',
 		});
-		const timeline = buildActivityTimeline([old, straddling], [], now, window, WIDTH);
+		const timeline = build([old, straddling], [], now, window, WIDTH);
 		const bars = timeline.rows.flatMap((row) => row.lanes.flat());
 		expect(bars.map((bar) => [bar.tasks[0]?.id, bar.start, bar.end, bar.clippedStart])).toEqual([
 			['straddling', 0, 100, true],
@@ -126,7 +146,7 @@ describe('buildActivityTimeline', () => {
 
 	test('a task given up on ends at its last request, not a day after it started', () => {
 		const stale = task({id: 'stale', startedAt: '2026-10-15T09:00:00Z'});
-		const timeline = buildActivityTimeline(
+		const timeline = build(
 			[stale],
 			[entry({id: 'late', taskId: 'stale', at: '2026-10-16T07:00:00Z', durationMs: 0})],
 			now,
@@ -151,7 +171,7 @@ describe('buildActivityTimeline', () => {
 			startedAt: '2026-10-16T08:59:00Z',
 			finishedAt: '2026-10-16T09:30:00Z',
 		});
-		const timeline = buildActivityTimeline([long, ...burst], [], now, window, WIDTH);
+		const timeline = build([long, ...burst], [], now, window, WIDTH);
 		expect(laneAssignments(timeline)).toEqual(
 			new Map([
 				['long', 0],
@@ -170,6 +190,20 @@ describe('buildActivityTimeline', () => {
 		);
 	});
 
+	test('counts every task under way in a bar of several, not the bar once', () => {
+		// Three short tasks under way a few seconds apart, over a month, are one bar.
+		const month = {from: new Date('2026-09-16T12:00:00Z'), to: now};
+		const burst = ['a', 'b', 'c'].map((id, index) =>
+			task({
+				id,
+				startedAt: new Date(Date.parse('2026-10-16T11:59:00Z') + index * 1000).toISOString(),
+			}),
+		);
+		const timeline = build(burst, [], now, month, WIDTH);
+		expect(timeline.rows[0]?.lanes.flat()).toHaveLength(1);
+		expect(timeline.rows[0]?.working).toBe(3);
+	});
+
 	test('held to their lanes, overlapping bars share one rather than opening another', () => {
 		const first = task({
 			id: 'first',
@@ -185,12 +219,12 @@ describe('buildActivityTimeline', () => {
 			['first', 0],
 			['second', 0],
 		]);
-		const apart = buildActivityTimeline([first, second], [], now, window, WIDTH, preferred);
+		const apart = build([first, second], [], now, window, WIDTH, preferred);
 		expect(apart.rows[0]?.lanes.map((lane) => lane.map((bar) => bar.tasks[0]?.id))).toEqual([
 			['first'],
 			['second'],
 		]);
-		const held = buildActivityTimeline([first, second], [], now, window, WIDTH, preferred, true);
+		const held = build([first, second], [], now, window, WIDTH, preferred, true);
 		expect(held.rows[0]?.lanes.map((lane) => lane.map((bar) => bar.tasks[0]?.id))).toEqual([
 			['first', 'second'],
 		]);
@@ -200,15 +234,7 @@ describe('buildActivityTimeline', () => {
 			startedAt: '2026-10-16T10:30:00Z',
 			finishedAt: '2026-10-16T11:45:00Z',
 		});
-		const crowded = buildActivityTimeline(
-			[first, second, third],
-			[],
-			now,
-			window,
-			WIDTH,
-			preferred,
-			true,
-		);
+		const crowded = build([first, second, third], [], now, window, WIDTH, preferred, true);
 		expect(crowded.rows[0]?.lanes.map((lane) => lane.map((bar) => bar.tasks[0]?.id))).toEqual([
 			['first', 'third', 'second'],
 		]);
@@ -222,7 +248,7 @@ describe('buildActivityTimeline', () => {
 				finishedAt: `2026-10-16T10:0${minute + 1}:00Z`,
 			}),
 		);
-		const timeline = buildActivityTimeline(
+		const timeline = build(
 			[...burst, call],
 			burst.map((one) => entry({id: `e-${one.id}`, taskId: one.id, at: one.finishedAt ?? ''})),
 			now,
@@ -241,23 +267,16 @@ describe('buildActivityTimeline', () => {
 
 	test('a bar keeps the lane it had where that is free, leaving a lane empty rather than hopping', () => {
 		// Alone, the inbox takes the first lane; told it had the second, it keeps that.
-		const first = buildActivityTimeline([inbox], [], now, window, WIDTH);
+		const first = build([inbox], [], now, window, WIDTH);
 		expect(laneAssignments(first)).toEqual(new Map([['t1', 0]]));
-		const kept = buildActivityTimeline([inbox], [], now, window, WIDTH, new Map([['t1', 1]]));
+		const kept = build([inbox], [], now, window, WIDTH, new Map([['t1', 1]]));
 		expect(kept.rows[0]?.lanes.map((lane) => lane.map((bar) => bar.tasks[0]?.id))).toEqual([
 			[],
 			['t1'],
 		]);
 		// Another task that overlaps goes to the first lane that is free, the empty one.
 		const overlapping = task({id: 't4', startedAt: '2026-10-16T11:30:00Z'});
-		const both = buildActivityTimeline(
-			[inbox, overlapping],
-			[],
-			now,
-			window,
-			WIDTH,
-			new Map([['t1', 1]]),
-		);
+		const both = build([inbox, overlapping], [], now, window, WIDTH, new Map([['t1', 1]]));
 		expect(laneAssignments(both)).toEqual(
 			new Map([
 				['t1', 1],
@@ -266,14 +285,7 @@ describe('buildActivityTimeline', () => {
 		);
 		// A task new to the window, though it started earlier, doesn't take a kept lane.
 		const earlier = task({id: 't5', startedAt: '2026-10-16T10:30:00Z'});
-		const newcomer = buildActivityTimeline(
-			[inbox, earlier],
-			[],
-			now,
-			window,
-			WIDTH,
-			new Map([['t1', 0]]),
-		);
+		const newcomer = build([inbox, earlier], [], now, window, WIDTH, new Map([['t1', 0]]));
 		expect(laneAssignments(newcomer)).toEqual(
 			new Map([
 				['t1', 0],
@@ -283,7 +295,7 @@ describe('buildActivityTimeline', () => {
 		// Compacted, the empty lanes go.
 		expect(laneAssignments(kept, true)).toEqual(new Map([['t1', 0]]));
 		// A lane that is taken is not kept: the bar goes to the first free one instead.
-		const clash = buildActivityTimeline(
+		const clash = build(
 			[inbox, overlapping],
 			[],
 			now,
@@ -303,7 +315,7 @@ describe('buildActivityTimeline', () => {
 	});
 
 	test('marks the axis in time before now, ending at it', () => {
-		const timeline = buildActivityTimeline([inbox], [], now, window, WIDTH);
+		const timeline = build([inbox], [], now, window, WIDTH);
 		expect(timeline.ticks.map((tick) => tick.label)).toEqual(['5h', '4h', '3h', '2h', '1h', 'Now']);
 		expect(timeline.ticks.at(-1)?.px).toBe(WIDTH);
 	});

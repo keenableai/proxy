@@ -8,7 +8,7 @@ import {
 	stepFor,
 	type TimelineRequest,
 } from '@/lib/timeline';
-import {endsOf, type TaskStatus, taskStatus} from '@/lib/timeline-window';
+import {combinedStatus, endsOf, type TaskStatus, taskStatus} from '@/lib/timeline-window';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
 
 // A task's run on its page: how it went, as a tree of tasks over time. Agents work through
@@ -81,6 +81,9 @@ const MIN_IDLE_PX = 120;
 const BREAK_PAD_PX = 8;
 const MIN_BETWEEN_PX = 56;
 
+// The least a busy stretch is taken to last, deciding what to fold (buildAxis).
+const MIN_BUSY_MS = SECOND;
+
 // The room an axis label takes, "23h 30m" with space around it.
 const LABEL_PX = 72;
 
@@ -102,7 +105,14 @@ type Axis = {
  * the width while nothing happened in them, each folded to a break.
  */
 export function buildAxis(spanMs: number, busy: Span[], width: number): Axis {
-	const active = merged(busy).map((span) => ({
+	// Each busy stretch is taken as at least a second long: a task starting or a request that took
+	// no time is a moment, and with only moments left unfolded, the few milliseconds between two of
+	// them would take the whole width.
+	const lasting = busy.map((span) => ({
+		start: span.start,
+		end: Math.max(span.end, span.start + MIN_BUSY_MS),
+	}));
+	const active = merged(lasting).map((span) => ({
 		start: Math.max(0, span.start),
 		end: Math.min(spanMs, span.end),
 	}));
@@ -333,13 +343,11 @@ export function buildRunTimeline(
 			task.finishedAt === parent.finishedAt
 		);
 	};
-	const statusOf = (of: ActivityTask[]): TaskStatus => {
-		const statuses = of.map((task) => taskStatus(task, now));
-		if (statuses.includes('running')) {
-			return 'running';
-		}
-		return statuses.every((status) => status === 'abandoned') ? 'abandoned' : 'finished';
-	};
+	// Every one of them finished, and one or more by its agent saying so: one given up on was
+	// handed back to nothing.
+	const handedBack = (of: ActivityTask[]) =>
+		of.every((task) => taskStatus(task, now) === 'finished') &&
+		of.some((task) => !finishedWithParent(task));
 
 	const rows: RunRow[] = [];
 	const lay = (children: ActivityTask[], depth: number, parentRow: number | null): Span[] => {
@@ -350,7 +358,7 @@ export function buildRunTimeline(
 				const members = item.map(spanOf);
 				const first = Math.min(...item.map((task) => time(task.startedAt)));
 				const last = Math.max(...item.map((task) => Math.min(endOf(task), axisEnd)));
-				const status = statusOf(item);
+				const status = combinedStatus(item.map((task) => taskStatus(task, now)));
 				rows.push({
 					kind: 'group',
 					id: groupId(item),
@@ -365,7 +373,7 @@ export function buildRunTimeline(
 					requests: requestsOf(rolled),
 					waiting: [],
 					rolledIn: rolled.length,
-					handedBack: status !== 'running' && item.some((task) => !finishedWithParent(task)),
+					handedBack: handedBack(item),
 				});
 				laid.push({start: px(first), end: px(last)});
 				continue;
@@ -388,7 +396,7 @@ export function buildRunTimeline(
 					requests: requestsOf(open ? [task] : [task, ...handedOn]),
 					waiting: [],
 					rolledIn: open ? 0 : handedOn.length,
-					handedBack: taskStatus(task, now) === 'finished' && !finishedWithParent(task),
+					handedBack: handedBack([task]),
 				};
 				const index = rows.push(row) - 1;
 				if (open) {
@@ -403,6 +411,31 @@ export function buildRunTimeline(
 	};
 	lay(below(null), 0, null);
 	return {rows, width, spanMs, ticks: axis.ticks, breaks: axis.breaks};
+}
+
+/**
+ * `expanded` with the task `taskId` folded: what it handed on rolled back into it, and every group
+ * of tasks under it, at any depth, together again. A group laid out is no row of its own, so it is
+ * found by its first member, one of the tasks under the one folded.
+ */
+export function folded(
+	expanded: ReadonlySet<string>,
+	tasks: ActivityTask[],
+	taskId: string,
+): Set<string> {
+	const groups = new Set<string>();
+	let parents = new Set([taskId]);
+	while (parents.size > 0) {
+		const level = tasks.filter(
+			(task) =>
+				task.parentId !== null && parents.has(task.parentId) && !groups.has(groupId([task])),
+		);
+		for (const task of level) {
+			groups.add(groupId([task]));
+		}
+		parents = new Set(level.map((task) => task.id));
+	}
+	return new Set([...expanded].filter((id) => id !== taskId && !groups.has(id)));
 }
 
 /** The id of the group row these tasks make, from its first member's. */

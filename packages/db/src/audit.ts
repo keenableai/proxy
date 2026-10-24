@@ -134,16 +134,22 @@ export async function listAuditEntries(
 	);
 }
 
+// What visibleTo says, for a query written out in SQL.
+function visibleSql(viewer: Viewer): Prisma.Sql {
+	return Prisma.sql`"orgId" = ${viewer.orgId} AND ("ownerUserId" IS NULL OR "ownerUserId" = ${viewer.userId})`;
+}
+
 /**
- * The requests the viewer sees made for any of `taskIds`, since `since` where given, in the order
- * they were made: at most `take` in all, shared out among the tasks, so every task keeps its newest
- * requests, all of them where they fit and its newest share of them where it has more.
+ * The requests the viewer sees made for any of `taskIds`, between `between.from` and `between.to`
+ * where given, in the order they were made: at most `take` in all, shared out among the tasks, so
+ * every task keeps its newest requests, all of them where they fit and its newest share of them
+ * where it has more.
  */
 export async function listTaskEntries(
 	viewer: Viewer,
 	taskIds: string[],
 	take: number,
-	since: Date | null = null,
+	between: {from: Date; to: Date} | null = null,
 ): Promise<Result<AuditEntryRow[], ApiError>> {
 	if (taskIds.length === 0) {
 		return wrapDb(async () => []);
@@ -151,7 +157,7 @@ export async function listTaskEntries(
 	const where = {
 		...visibleTo(viewer),
 		taskId: {in: taskIds},
-		...(since === null ? {} : {createdAt: {gte: since}}),
+		...(between === null ? {} : {createdAt: {gte: between.from, lte: between.to}}),
 	};
 	return wrapDb(async () => {
 		const counts = await db.auditEntry.groupBy({by: ['taskId'], where, _count: {_all: true}});
@@ -166,14 +172,42 @@ export async function listTaskEntries(
 			SELECT "id" FROM (
 				SELECT "id", ROW_NUMBER() OVER (PARTITION BY "taskId" ORDER BY "createdAt" DESC, "id" DESC) AS "rank"
 				FROM "AuditEntry"
-				WHERE "orgId" = ${viewer.orgId}
-					AND ("ownerUserId" IS NULL OR "ownerUserId" = ${viewer.userId})
+				WHERE ${visibleSql(viewer)}
 					AND "taskId" IN (${Prisma.join(taskIds)})
-					${since === null ? Prisma.empty : Prisma.sql`AND "createdAt" >= ${since}`}
+					${between === null ? Prisma.empty : Prisma.sql`AND "createdAt" >= ${between.from} AND "createdAt" <= ${between.to}`}
 			) AS "ranked"
 			WHERE "rank" <= ${share}`;
 		return db.auditEntry.findMany({
 			where: {id: {in: newest.map((row) => row.id)}},
+			orderBy: {createdAt: 'asc'},
+			select: entrySelect,
+		});
+	});
+}
+
+/**
+ * The last request the viewer sees made for each of `taskIds` after `after`, where one was, in the
+ * order they were made: for a stretch of time read that ends before now, when a task given up on
+ * last had anything done for it, which is when the web app shows it as having ended.
+ */
+export async function listLastTaskEntries(
+	viewer: Viewer,
+	taskIds: string[],
+	after: Date,
+): Promise<Result<AuditEntryRow[], ApiError>> {
+	if (taskIds.length === 0) {
+		return wrapDb(async () => []);
+	}
+	return wrapDb(async () => {
+		const last = await db.$queryRaw<Array<{id: string}>>`
+			SELECT DISTINCT ON ("taskId") "id"
+			FROM "AuditEntry"
+			WHERE ${visibleSql(viewer)}
+				AND "taskId" IN (${Prisma.join(taskIds)})
+				AND "createdAt" > ${after}
+			ORDER BY "taskId", "createdAt" DESC, "id" DESC`;
+		return db.auditEntry.findMany({
+			where: {id: {in: last.map((row) => row.id)}},
 			orderBy: {createdAt: 'asc'},
 			select: entrySelect,
 		});

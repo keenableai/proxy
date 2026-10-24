@@ -5,6 +5,7 @@ import type {Viewer} from '@proxy/db/viewer';
 
 const listAuditEntries = mock();
 const listTaskEntries = mock();
+const listLastTaskEntries = mock();
 
 const listMemberNames = mock(async (): Promise<unknown> => Ok([]));
 
@@ -13,7 +14,7 @@ mock.module('@proxy/db/organization', () => ({getMembership: mock(async () => Ok
 const requireViewer = mock(async () => Ok({orgId: 'org-1', userId: 'user-1', slug: 'org-1', name: 'Workspace', role: 'owner', onboarded: true, experiments: []}));
 
 mock.module('../utils/user-org', () => ({requireViewer, requireOwner: requireViewer}));
-mock.module('@proxy/db/audit', () => ({listAuditEntries, listTaskEntries}));
+mock.module('@proxy/db/audit', () => ({listAuditEntries, listTaskEntries, listLastTaskEntries}));
 
 const listAgentTasks = mock();
 const listAgentTasksBetween = mock();
@@ -31,6 +32,7 @@ beforeEach(() => {
 	listAgentTasks.mockResolvedValue(Ok([]));
 	listAgentTasksBetween.mockResolvedValue(Ok([]));
 	listSubTasks.mockResolvedValue(Ok([]));
+	listLastTaskEntries.mockResolvedValue(Ok([]));
 	setSystemTime(new Date('2026-10-15T23:30:00Z'));
 });
 
@@ -75,8 +77,10 @@ describe('handleActivityTimelineRoute', () => {
 
 		const viewer = expect.objectContaining({orgId: 'org-1', userId: 'user-1'});
 		expect(listAgentTasksBetween).toHaveBeenCalledWith(viewer, new Date('2026-10-14T23:30:00Z'), new Date('2026-10-15T23:30:00Z'), 200);
-		expect(listSubTasks).toHaveBeenCalledWith(viewer, ['task-1'], 1000);
-		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['task-1'], 2000, new Date('2026-10-14T23:30:00Z'));
+		expect(listSubTasks).toHaveBeenCalledWith(viewer, ['task-1'], 1000, {newest: true});
+		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['task-1'], 2000, {from: new Date('2026-10-14T23:30:00Z'), to: new Date('2026-10-15T23:30:00Z')});
+		// Read up to now, there is nothing after the stretch to read.
+		expect(listLastTaskEntries).not.toHaveBeenCalled();
 		const {createdAt, ...fields} = entry;
 		expect(result.unwrap()).toEqual({
 			now: '2026-10-15T23:30:00.000Z',
@@ -127,14 +131,36 @@ describe('handleActivityTimelineRoute', () => {
 		const pricing = task('pricing', null, '2026-10-01T10:20:00Z');
 		listAgentTasksBetween.mockResolvedValue(Ok([pricing, notes]));
 		listSubTasks.mockResolvedValue(Ok([task('sub', 'notes', '2026-10-01T10:10:00Z')]));
-		listTaskEntries.mockResolvedValue(Ok([]));
+		const inside = {
+			id: 'inside',
+			agentId: 'agent-1',
+			connectionId: 'mail-1',
+			collectionId: 'emails',
+			action: 'list',
+			recordTitle: null,
+			query: null,
+			outcome: 'allowed' as const,
+			via: 'mcp' as const,
+			taskId: 'notes',
+			durationMs: 300,
+			userId: null,
+			error: null,
+			createdAt: new Date('2026-10-01T10:30:00Z'),
+		};
+		const after = {...inside, id: 'after', createdAt: new Date('2026-10-03T08:00:00Z')};
+		listTaskEntries.mockResolvedValue(Ok([inside]));
+		listLastTaskEntries.mockResolvedValue(Ok([after]));
 		const {handleActivityTimelineRoute} = await import('./route');
 		const result = await handleActivityTimelineRoute(makeRequest({from: '2026-10-01T00:00:00Z', to: '2026-10-02T00:00:00Z'}) as never);
 
 		const viewer = expect.objectContaining({orgId: 'org-1', userId: 'user-1'});
 		expect(listAgentTasksBetween).toHaveBeenCalledWith(viewer, new Date('2026-10-01T00:00:00Z'), new Date('2026-10-02T00:00:00Z'), 200);
-		expect(listSubTasks).toHaveBeenCalledWith(viewer, ['pricing', 'notes'], 1000);
-		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['pricing', 'sub', 'notes'], 2000, new Date('2026-10-01T00:00:00Z'));
+		expect(listSubTasks).toHaveBeenCalledWith(viewer, ['pricing', 'notes'], 1000, {newest: true});
+		const stretch = {from: new Date('2026-10-01T00:00:00Z'), to: new Date('2026-10-02T00:00:00Z')};
+		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['pricing', 'sub', 'notes'], 2000, stretch);
+		// Each task's last request after the stretch, for when one given up on ended.
+		expect(listLastTaskEntries).toHaveBeenCalledWith(viewer, ['pricing', 'sub', 'notes'], stretch.to);
+		expect(result.unwrap().entries.map((one) => one.id)).toEqual(['inside', 'after']);
 		expect(result.unwrap().to).toBe('2026-10-02T00:00:00.000Z');
 		expect(result.unwrap().tasks.map((one) => one.id)).toEqual(['pricing', 'sub', 'notes']);
 	});

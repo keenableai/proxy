@@ -7,7 +7,13 @@ import {
 	timedRequests,
 	type TimelineRequest,
 } from '@/lib/timeline';
-import {endsOf, gridlines, type TaskStatus, taskStatus} from '@/lib/timeline-window';
+import {
+	combinedStatus,
+	endsOf,
+	gridlines,
+	type TaskStatus,
+	taskStatus,
+} from '@/lib/timeline-window';
 import type {ActivityTask, AuditEntry} from '@/lib/types';
 
 // The home page's timeline: who is doing what. Every agent has a row over a window of time
@@ -64,7 +70,7 @@ const LANE_GAP_PX = 6;
 // to say how many it holds.
 const SHORT_PX = 28;
 const CLUSTER_GAP_PX = 16;
-export const CLUSTER_MIN_PX = 52;
+const CLUSTER_MIN_PX = 52;
 
 // The room a gridline's label takes, "23h 30m" with space around it.
 const LABEL_PX = 72;
@@ -81,7 +87,7 @@ type RolledTask = {
 };
 
 // The tasks of a timeline as they stood at `now`, ready to be laid out over any window.
-export type ActivityTasks = {now: Date; rolled: RolledTask[]};
+type ActivityTasks = {now: Date; rolled: RolledTask[]};
 
 /** `tasks` and the requests made for them as they stood at `now`, each task with its sub-tasks rolled in. */
 export function prepareActivityTimeline(
@@ -135,32 +141,14 @@ export function prepareActivityTimeline(
 }
 
 /**
- * The timeline of `tasks` over `window`, `width` pixels wide, as it stood at `now`: every agent's
- * row, the busiest first, over the tasks it was given that were under way in the window, each bar
- * in the lane `preferred` gives it where that is free, else the first that is. With `held`, a bar
+ * The timeline of the tasks prepared once (prepareActivityTimeline) over `window`, `width` pixels
+ * wide, as they stood at their `now`: every agent's row, the busiest first, over the tasks it was
+ * given that were under way in the window, each bar in the lane `preferred` gives it where that is
+ * free, else the first that is. With `held`, a bar
  * keeps the lane `preferred` gives it even where another bar is there, the two overlapping, and no
  * lane is opened for one with no lane to keep: for the moment the view is zooming in on a bar, so
  * bars part along the way rather than hop lanes or open ones empty again at the end.
  */
-export function buildActivityTimeline(
-	allTasks: ActivityTask[],
-	entries: AuditEntry[],
-	now: Date,
-	window: Window,
-	width: number,
-	preferred: LanePreferences = new Map(),
-	held = false,
-): ActivityTimeline {
-	return layActivityTimeline(
-		prepareActivityTimeline(allTasks, entries, now),
-		window,
-		width,
-		preferred,
-		held,
-	);
-}
-
-/** The timeline of tasks prepared once (prepareActivityTimeline), over `window`, as buildActivityTimeline lays it out. */
 export function layActivityTimeline(
 	{now, rolled}: ActivityTasks,
 	window: Window,
@@ -232,7 +220,11 @@ export function layActivityTimeline(
 		for (const lane of lanes) {
 			lane.sort((a, b) => a.start - b.start);
 		}
-		return {agentId, lanes, working: own.filter((bar) => bar.status === 'running').length};
+		// Tasks, not bars: a bar of several may hold more than one under way.
+		const working = own
+			.flatMap((bar) => bar.tasks)
+			.filter((task) => taskStatus(task, now) === 'running').length;
+		return {agentId, lanes, working};
 	});
 	const lastEnd = (row: ActivityRow) => Math.max(...row.lanes.flat().map((bar) => bar.end));
 	rows.sort(
@@ -314,16 +306,11 @@ function clustered(bars: ActivityBar[], width: number): ActivityBar[] {
 		}
 		const tasks = [...last.tasks, ...bar.tasks];
 		const members = [...last.members, ...bar.members];
-		const statuses = [last.status, bar.status];
 		const start = Math.min(...members.map((member) => member.start), width - CLUSTER_MIN_PX);
 		out[out.length - 1] = {
 			tasks,
 			members,
-			status: statuses.includes('running')
-				? 'running'
-				: statuses.every((status) => status === 'abandoned')
-					? 'abandoned'
-					: 'finished',
+			status: combinedStatus([last.status, bar.status]),
 			start,
 			end: Math.max(...members.map((member) => member.end), start + CLUSTER_MIN_PX),
 			fromMs: Math.min(last.fromMs, bar.fromMs),

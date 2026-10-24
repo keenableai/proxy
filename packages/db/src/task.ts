@@ -256,13 +256,15 @@ export async function listAgentTasks(
 
 /**
  * The sub-tasks of the tasks `taskIds`, at every depth, that the viewer sees, in the order started:
- * the first `take` of them, level by level, so a task with more under it than that shows what it
- * handed on itself before what those handed on in turn.
+ * `take` of them at most, level by level, so a task with more under it than that shows what it
+ * handed on itself before what those handed on in turn; of each level, the first started, or with
+ * `newest`, the last, for where the newest of `taskIds` matter most.
  */
 export async function listSubTasks(
 	viewer: Viewer,
 	taskIds: string[],
 	take: number,
+	{newest = false}: {newest?: boolean} = {},
 ): Promise<Result<AgentTaskRow[], ApiError>> {
 	return wrapDb(async () => {
 		const found: AgentTaskRow[] = [];
@@ -271,7 +273,7 @@ export async function listSubTasks(
 			const level: AgentTaskRow[] = await db.agentTask.findMany({
 				where: {...visibleTo(viewer), parentId: {in: parentIds}},
 				select: taskSelect,
-				orderBy: {createdAt: 'asc'},
+				orderBy: {createdAt: newest ? 'desc' : 'asc'},
 				take: take - found.length,
 			});
 			found.push(...level);

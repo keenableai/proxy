@@ -2,7 +2,7 @@ import {Err, type Result} from 'ts-results-es';
 import {z} from 'zod';
 
 import {ApiErr, type ApiError, Do, parseSchema} from '@proxy/utils';
-import {type AuditEntryRow, listAuditEntries, listTaskEntries} from '@proxy/db/audit';
+import {type AuditEntryRow, listAuditEntries, listLastTaskEntries, listTaskEntries} from '@proxy/db/audit';
 import {listMemberNames} from '@proxy/db/organization';
 import {type AgentTaskRow, listAgentTasks, listAgentTasksBetween, listSubTasks} from '@proxy/db/task';
 import type {Viewer} from '@proxy/db/viewer';
@@ -178,7 +178,8 @@ export type ActivityTimelineResponse = {
 	to: string;
 	// Every task under way at some point between `from` and `to`, with its sub-tasks, newest first.
 	tasks: ActivityTaskResponse[];
-	// The requests made for them since `from`, in the order they were made.
+	// The requests made for them between `from` and `to`, in the order they were made; and, where
+	// `to` is before now, each task's last made after it.
 	entries: AuditEntryResponse[];
 };
 
@@ -194,22 +195,28 @@ export function handleActivityTimelineRoute(request: AuthenticatedRequest): Prom
 		const from = new Date(Math.max(new Date(query.from).getTime(), now.getTime() - MAX_WINDOW_MS));
 		const to = new Date(Math.min(Math.max(new Date(query.to ?? now).getTime(), from.getTime()), now.getTime()));
 		const tops = $(await listAgentTasksBetween(viewer, from, to, MAX_TASKS));
+		// Past the most, the sub-tasks of the newest tasks are the ones kept, as the timeline is.
 		const subTasks = $(
 			await listSubTasks(
 				viewer,
 				tops.map((task) => task.id),
 				MAX_TIMELINE_SUB_TASKS,
+				{newest: true},
 			),
 		);
 		const tasks = [...tops, ...subTasks].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-		const rows = $(
-			await listTaskEntries(
-				viewer,
-				tasks.map((task) => task.id),
-				MAX_TIMELINE_ENTRIES,
-				from,
-			),
-		);
-		return {now: now.toISOString(), from: from.toISOString(), to: to.toISOString(), tasks: tasks.map(toActivityTask), entries: $(await toEntries(viewer, rows))};
+		const ids = tasks.map((task) => task.id);
+		// Only the stretch read shares out the most requests, so none goes to what came after it.
+		const rows = $(await listTaskEntries(viewer, ids, MAX_TIMELINE_ENTRIES, {from, to}));
+		// Read back from before now, a task given up on may have had requests made after the stretch:
+		// the last of them says when it ended (@/lib/timeline-window's endsOf in the web app).
+		const later = to < now ? $(await listLastTaskEntries(viewer, ids, to)) : [];
+		return {
+			now: now.toISOString(),
+			from: from.toISOString(),
+			to: to.toISOString(),
+			tasks: tasks.map(toActivityTask),
+			entries: $(await toEntries(viewer, [...rows, ...later])),
+		};
 	});
 }

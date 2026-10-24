@@ -12,8 +12,8 @@ function Both({outcome}: {outcome: string | null}) {
 	const [shown, setShown] = useState<ShownText>('goal');
 	return (
 		<>
-			<TextSwitch shown={shown} hasOutcome={outcome !== null} onChange={setShown} />
-			<TextPanel shown={shown} goal="Plan the week" outcome={outcome} />
+			<TextSwitch id="text" shown={shown} hasOutcome={outcome !== null} onChange={setShown} />
+			<TextPanel id="text" shown={shown} goal="Plan the week" outcome={outcome} />
 		</>
 	);
 }
@@ -31,6 +31,21 @@ describe('TextSwitch and TextPanel', () => {
 
 		expect(screen.getByRole('tabpanel').textContent).toBe('Tuesday is the day to start');
 		expect(screen.getByRole('tab', {name: 'Outcome'}).getAttribute('aria-selected')).toBe('true');
+	});
+
+	test('the arrow keys move between the two, and the panel is named by the tab shown', () => {
+		render(<Both outcome="Tuesday is the day to start" />);
+		const description = screen.getByRole('tab', {name: 'Description'});
+		const outcome = screen.getByRole('tab', {name: 'Outcome'});
+		expect([description.tabIndex, outcome.tabIndex]).toEqual([0, -1]);
+		expect(description.getAttribute('aria-controls')).toBe(screen.getByRole('tabpanel').id);
+
+		fireEvent.keyDown(description, {key: 'ArrowRight'});
+
+		expect(outcome.getAttribute('aria-selected')).toBe('true');
+		expect([description.tabIndex, outcome.tabIndex]).toEqual([-1, 0]);
+		expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe(outcome.id);
+		expect(document.activeElement).toBe(outcome);
 	});
 
 	test('a task without an outcome has only its description, and the switch can’t be moved', () => {

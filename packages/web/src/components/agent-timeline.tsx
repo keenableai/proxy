@@ -3,7 +3,7 @@ import {useLocation, useSearchParams} from 'react-router';
 import {getActivityTimeline} from '@/client/agents-client';
 import type {ActivityTimeline as ActivityAnswer} from '@/client/schemas';
 import {AuditEntryDialog} from '@/components/audit-entry-dialog';
-import {ActivityTimeline} from '@/components/activity-timeline';
+import {ActivityTimeline, CHART_ATTRIBUTE} from '@/components/activity-timeline';
 import type {Window} from '@/lib/activity-timeline';
 import {useOrgSlug} from '@/hooks/use-org';
 import {
@@ -37,9 +37,6 @@ const REFRESH_MS = 60 * 1000;
 const ZOOM_SETTLE_MS = 300;
 
 const MINUTE_MS = 60 * 1000;
-
-// About how wide the labels beside the timeline are, so scrolling moves it as far as the pointer.
-const LABELS_PX = 240;
 
 const CUSTOM = 'custom';
 
@@ -157,6 +154,23 @@ export function AgentTimeline({
 	// there, which it isn't while there is nothing to show. Now is the timeline's, as it was last
 	// read, so the window moves where it is drawn.
 	const listenForZoom = useCallback((element: HTMLDivElement) => {
+		// Zoomed with the wheel, the window is whole minutes again once the wheel rests.
+		let rest: ReturnType<typeof setTimeout> | undefined;
+		const rounded = () => {
+			const whole = Math.round(length.current);
+			if (whole === length.current || zooming.current !== null) {
+				return;
+			}
+			length.current = whole;
+			setMinutes(whole);
+		};
+		// The chart beside the agents' names, measured as the wheel turns, since where it starts and
+		// how wide it is change with the screen: where the pointer is over it, and how long a pixel is.
+		const chartBox = () => {
+			const chart = element.querySelector(`[${CHART_ATTRIBUTE}]`) ?? element;
+			const box = chart.getBoundingClientRect();
+			return {left: box.left, width: Math.max(box.width, 100)};
+		};
 		const move = (nextMinutes: number, nextEnd: number | null) => {
 			cancelZoom(zooming);
 			setAhead(NO_WINDOWS);
@@ -173,14 +187,8 @@ export function AgentTimeline({
 				// around it; up to now, past which the window can't reach.
 				const current = length.current;
 				const next = zoomed(current, event.deltaY);
-				const chartWidth = Math.max(element.clientWidth - LABELS_PX, 100);
-				const fraction = Math.min(
-					Math.max(
-						(event.clientX - element.getBoundingClientRect().left - LABELS_PX) / chartWidth,
-						0,
-					),
-					1,
-				);
+				const chart = chartBox();
+				const fraction = Math.min(Math.max((event.clientX - chart.left) / chart.width, 0), 1);
 				const endAt = ending.current ?? now;
 				const under = endAt - (1 - fraction) * current * MINUTE_MS;
 				const nextEnd = under + (1 - fraction) * next * MINUTE_MS;
@@ -188,6 +196,8 @@ export function AgentTimeline({
 					next,
 					nextEnd >= now ? null : Math.max(nextEnd, now - (MAX_MINUTES - next) * MINUTE_MS),
 				);
+				clearTimeout(rest);
+				rest = setTimeout(rounded, ZOOM_SETTLE_MS);
 				return;
 			}
 			const sideways = event.shiftKey ? event.deltaY : event.deltaX;
@@ -197,13 +207,23 @@ export function AgentTimeline({
 			event.preventDefault();
 			// A zoom stopped part of the way is whole minutes again.
 			const current = zooming.current === null ? length.current : Math.round(length.current);
-			const msPerPx = (current * MINUTE_MS) / Math.max(element.clientWidth - LABELS_PX, 100);
+			const msPerPx = (current * MINUTE_MS) / chartBox().width;
 			const next = (ending.current ?? now) + sideways * msPerPx;
 			move(current, next >= now ? null : Math.max(next, now - (MAX_MINUTES - current) * MINUTE_MS));
 		};
 		element.addEventListener('wheel', onWheel, {passive: false});
-		return () => element.removeEventListener('wheel', onWheel);
+		return () => {
+			clearTimeout(rest);
+			element.removeEventListener('wheel', onWheel);
+		};
 	}, []);
+
+	// Choosing a window, or going back to now, stops a zoom under way, which would otherwise carry
+	// the window on to where it was headed.
+	const stopZoom = () => {
+		cancelZoom(zooming);
+		setAhead(NO_WINDOWS);
+	};
 
 	// The window zoomed in on a stretch of time: a little longer than it, centred on it, ending at
 	// now where the stretch runs up to it. It gets there over a moment rather than at once, along
@@ -321,7 +341,10 @@ export function AgentTimeline({
 				<Button
 					variant="outline"
 					size="sm"
-					onClick={() => setEnd(null)}
+					onClick={() => {
+						stopZoom();
+						setEnd(null);
+					}}
 					aria-hidden={end === null}
 					tabIndex={end === null ? -1 : undefined}
 					className={cn(
@@ -345,6 +368,7 @@ export function AgentTimeline({
 					onValueChange={(next) => {
 						const chosen = WINDOWS.find((choice) => choice.id === next);
 						if (chosen) {
+							stopZoom();
 							setMinutes(chosen.minutes);
 						}
 					}}

@@ -1,19 +1,21 @@
 import {ChevronDownIcon, ChevronRightIcon, CornerDownRightIcon} from 'lucide-react';
-import {Fragment, useCallback, useId, useMemo, useState} from 'react';
+import {Fragment, useId, useMemo, useState} from 'react';
 import {Link, useLocation} from 'react-router';
 import {
 	AxisLabels,
 	ChartLegend,
+	ChartTarget,
 	HatchDefs,
 	Shimmer,
 	RequestMarks,
 	RequestTargets,
 	RequestTooltip,
-	TaskNames,
+	TasksTooltip,
 	TaskTooltip,
 	Track,
 } from '@/components/timeline-chart';
 import {useRequestTooltip} from '@/hooks/use-request-tooltip';
+import {useTitleOf} from '@/hooks/use-title-of';
 import {useChartWidth} from '@/hooks/use-chart-width';
 import {useOrgSlug} from '@/hooks/use-org';
 import {backFrom} from '@/lib/back';
@@ -21,6 +23,7 @@ import {formatTime} from '@/lib/format';
 import {
 	buildRunTimeline,
 	defaultExpanded,
+	folded,
 	type RunBreak,
 	type RunRow,
 	type RunTimeline as RunLayout,
@@ -29,11 +32,9 @@ import {
 	ABANDONED_OPACITY,
 	formatDuration,
 	MIN_TRACK_PX,
-	requestSummary,
 	roughDuration,
 	TASK_COLOR_CLASS,
 } from '@/lib/timeline';
-import {STATUS_LABEL} from '@/lib/timeline-window';
 import type {ActivityTask, AuditEntry, Connection} from '@/lib/types';
 import {Tooltip, TooltipContent, TooltipTrigger} from '@proxy/ui/components/tooltip';
 import {cn} from '@proxy/ui/lib/utils';
@@ -77,29 +78,14 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 		() => buildRunTimeline(tasks, entries, new Date(now), width, {expanded}),
 		[tasks, entries, now, width, expanded],
 	);
-	// The same from one drawing to the next, so the rows' requests are drawn again only as they change.
-	const titleOf = useCallback(
-		(taskId: string | null) => tasks.find((candidate) => candidate.id === taskId)?.title ?? null,
-		[tasks],
-	);
+	const titleOf = useTitleOf(tasks);
+	// Folding a task folds the groups under it back together too.
 	const toggle = (row: RunRow) =>
 		setExpanded((current) => {
-			const next = new Set(current);
-			if (next.has(row.id)) {
-				next.delete(row.id);
-				// Folding a task folds the groups under it back together too.
-				for (const id of current) {
-					if (
-						id.startsWith('group:') &&
-						rowsUnder(timeline, row).some((under) => under.id === id)
-					) {
-						next.delete(id);
-					}
-				}
-				return next;
+			if (current.has(row.id)) {
+				return folded(current, tasks, row.id);
 			}
-			next.add(row.id);
-			return next;
+			return new Set([...current, row.id]);
 		});
 	const isOpen = (row: RunRow, index: number) =>
 		row.kind === 'task' && timeline.rows.some((candidate) => candidate.parentRow === index);
@@ -259,13 +245,6 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 	);
 }
 
-// Every row laid out under a row, at any depth.
-function rowsUnder(timeline: RunLayout, row: RunRow): RunRow[] {
-	const index = timeline.rows.indexOf(row);
-	const direct = timeline.rows.filter((candidate) => candidate.parentRow === index);
-	return direct.flatMap((child) => [child, ...rowsUnder(timeline, child)]);
-}
-
 // A row's name: its task's, indented under what it was handed from, with how long it took, opening
 // the task's page for every task but the page's own, at the top; a group's, how many tasks it
 // holds. Where a task handed any on, a chevron lays
@@ -324,10 +303,13 @@ function RowLabel({
 					{row.depth > 0 && <CornerDownRightIcon className="size-3.5 text-muted-foreground" />}
 				</span>
 			)}
+			{/* The chevron is the group's one stop for the keyboard; its name is a wider place to click. */}
 			{row.kind === 'group' && (
 				<button
 					type="button"
 					onClick={onToggle}
+					tabIndex={-1}
+					aria-hidden
 					className="flex h-full min-w-0 flex-1 cursor-pointer items-center pr-3 pl-1 text-left text-muted-foreground hover:text-foreground"
 				>
 					<span className="truncate">{row.tasks.length} tasks</span>
@@ -378,66 +360,44 @@ function RowTarget({
 		top,
 		height: TRACK_H,
 	};
-	const className = 'absolute rounded-md focus-visible:outline-2 focus-visible:outline-ring';
 	if (row.kind === 'group' || !task) {
 		return (
-			<Tooltip disableHoverablePopup>
-				<TooltipTrigger
-					render={
-						<button
-							type="button"
-							onClick={onToggle}
-							aria-label={`Show the ${row.tasks.length} tasks`}
-							className={cn(className, 'cursor-pointer')}
-							style={style}
-							onMouseEnter={() => onHover(true)}
-							onMouseLeave={() => onHover(false)}
-						/>
-					}
-				/>
-				<TooltipContent className="pointer-events-none max-w-xs">
-					<GroupDetails row={row} />
-				</TooltipContent>
-			</Tooltip>
-		);
-	}
-	const own = row.depth === 0;
-	return (
-		<Tooltip disableHoverablePopup>
-			<TooltipTrigger
-				render={
-					own ? (
-						<span
-							aria-label={task.title}
-							className={className}
-							style={style}
-							onMouseEnter={() => onHover(true)}
-							onMouseLeave={() => onHover(false)}
-						/>
-					) : (
-						<Link
-							to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
-							state={back}
-							preventScrollReset
-							aria-label={task.title}
-							className={className}
-							style={style}
-							onMouseEnter={() => onHover(true)}
-							onMouseLeave={() => onHover(false)}
-						/>
-					)
-				}
-			/>
-			<TooltipContent className="pointer-events-none max-w-xs">
-				<TaskTooltip
-					task={task}
+			<ChartTarget
+				action={{onClick: onToggle}}
+				label={`Show the ${row.tasks.length} tasks`}
+				className="cursor-pointer"
+				style={style}
+				onHover={onHover}
+			>
+				<TasksTooltip
+					heading={`${row.tasks.length} tasks handed on one after another`}
 					status={row.status}
 					durationMs={row.durationMs}
 					requests={row.requests}
-					subTasks={row.rolledIn}
+					tasks={row.tasks}
 				/>
-			</TooltipContent>
-		</Tooltip>
+			</ChartTarget>
+		);
+	}
+	return (
+		<ChartTarget
+			action={
+				row.depth === 0
+					? null
+					: {to: `/${org}/activity/tasks/${encodeURIComponent(task.id)}`, state: back}
+			}
+			label={task.title}
+			style={style}
+			onHover={onHover}
+		>
+			<TaskTooltip
+				task={task}
+				status={row.status}
+				durationMs={row.durationMs}
+				requests={row.requests}
+				subTasks={row.rolledIn}
+			/>
+		</ChartTarget>
 	);
 }
 
@@ -552,13 +512,16 @@ function HandoffTargets({
 						? [{at: xUp, text: `${name} handed back`, when: last?.finishedAt ?? null}]
 						: []),
 				];
+				// A stop for the keyboard, so when it was handed on or back can be read without a pointer.
 				return marks.map((mark) => (
 					<Tooltip key={`${row.id}:${mark.at}`} disableHoverablePopup>
 						<TooltipTrigger
 							render={
 								<span
-									aria-hidden
-									className="absolute -translate-1/2 rounded-full"
+									tabIndex={0}
+									role="img"
+									aria-label={mark.when ? `${mark.text}, ${formatTime(mark.when)}` : mark.text}
+									className="absolute -translate-1/2 rounded-full focus-visible:outline-2 focus-visible:outline-ring"
 									style={{left: mark.at, top: from, width: DOT_TARGET, height: DOT_TARGET}}
 									onMouseEnter={() => onHover(row.id)}
 									onMouseLeave={() => onHover(null)}
@@ -578,15 +541,17 @@ function HandoffTargets({
 	);
 }
 
-// The target over a break: on hover, how long nothing happened.
+// The target over a break: on hover or focus, how long nothing happened.
 function BreakTarget({gap, height}: {gap: RunBreak; height: number}) {
 	return (
 		<Tooltip disableHoverablePopup>
 			<TooltipTrigger
 				render={
 					<span
-						aria-hidden
-						className="absolute"
+						tabIndex={0}
+						role="img"
+						aria-label={`Nothing happened for ${formatDuration(gap.idleMs)}`}
+						className="absolute focus-visible:outline-2 focus-visible:outline-ring"
 						style={{left: gap.start, width: gap.end - gap.start, top: 0, height}}
 					/>
 				}
@@ -598,21 +563,5 @@ function BreakTarget({gap, height}: {gap: RunBreak; height: number}) {
 				</span>
 			</TooltipContent>
 		</Tooltip>
-	);
-}
-
-// What a group row says on hover, worked out only once it is open.
-function GroupDetails({row}: {row: RunRow}) {
-	return (
-		<span className="flex flex-col gap-1">
-			<span className="font-medium">{row.tasks.length} tasks handed on one after another</span>
-			<span className="opacity-80">
-				{[
-					`${STATUS_LABEL[row.status]} · ${formatDuration(row.durationMs)}`,
-					...requestSummary(row.requests),
-				].join(' · ')}
-			</span>
-			<TaskNames tasks={row.tasks} />
-		</span>
 	);
 }

@@ -12,7 +12,7 @@ export const WINDOWS = [
 	{id: '24h', label: 'Last 24 hours', minutes: 24 * 60},
 ] as const;
 
-export type WindowId = (typeof WINDOWS)[number]['id'];
+type WindowId = (typeof WINDOWS)[number]['id'];
 
 export const DEFAULT_MINUTES = 24 * 60;
 
@@ -42,11 +42,13 @@ const ZOOM_PER_PIXEL = 0.004;
 
 /**
  * The window after a turn of the wheel: longer for scrolling down, shorter for up, by a factor so
- * zooming feels the same at every length, kept between the least and the most it can be.
+ * zooming feels the same at every length, kept between the least and the most it can be. Not
+ * rounded to whole minutes, so the small turns a pinch sends add up rather than each rounding back
+ * to where it started; it is rounded once the wheel rests.
  */
 export function zoomed(minutes: number, deltaY: number): number {
 	const next = minutes * Math.exp(deltaY * ZOOM_PER_PIXEL);
-	return Math.round(Math.min(Math.max(next, MIN_MINUTES), MAX_MINUTES));
+	return Math.min(Math.max(next, MIN_MINUTES), MAX_MINUTES);
 }
 
 /**
@@ -168,6 +170,14 @@ export function taskStatus(task: TaskTimes, now: Date): TaskStatus {
 		return 'finished';
 	}
 	return abandonedAt(task, now) === null ? 'running' : 'abandoned';
+}
+
+/** The status of several tasks drawn as one: under way if any is, else abandoned if every one was. */
+export function combinedStatus(statuses: TaskStatus[]): TaskStatus {
+	if (statuses.includes('running')) {
+		return 'running';
+	}
+	return statuses.every((status) => status === 'abandoned') ? 'abandoned' : 'finished';
 }
 
 // The stretches of time a window is marked off in: the windows on offer each have their own, a

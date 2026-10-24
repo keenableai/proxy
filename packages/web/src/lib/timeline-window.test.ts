@@ -165,6 +165,14 @@ describe('the window', () => {
 		expect(zoomed(20000, 5000)).toBe(31 * 24 * 60);
 	});
 
+	test('small turns, as a pinch sends, add up rather than each rounding back', () => {
+		let minutes = 15;
+		for (let turn = 0; turn < 10; turn++) {
+			minutes = zoomed(minutes, 2);
+		}
+		expect(minutes).toBeGreaterThan(16);
+	});
+
 	test('is one on offer at its lengths, and named by its length otherwise', () => {
 		expect(presetOf(360)).toBe('6h');
 		expect(presetOf(135)).toBeNull();

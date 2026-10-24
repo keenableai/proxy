@@ -1,18 +1,20 @@
-import {Fragment, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, useEffect, useMemo, useRef, useState} from 'react';
 import {Link} from 'react-router';
 import {AgentLogo} from '@/components/brand-logo';
 import {
 	AxisLabels,
 	ChartLegend,
+	ChartTarget,
 	Shimmer,
 	RequestMarks,
 	RequestTargets,
 	RequestTooltip,
-	TaskNames,
+	TasksTooltip,
 	TaskTooltip,
 	Track,
 } from '@/components/timeline-chart';
 import {useRequestTooltip} from '@/hooks/use-request-tooltip';
+import {useTitleOf} from '@/hooks/use-title-of';
 import {useChartWidth} from '@/hooks/use-chart-width';
 import {useOrgSlug} from '@/hooks/use-org';
 import {
@@ -27,16 +29,8 @@ import {
 	prepareActivityTimeline,
 	type Window,
 } from '@/lib/activity-timeline';
-import {
-	ABANDONED_OPACITY,
-	formatDuration,
-	MIN_TRACK_PX,
-	requestSummary,
-	TASK_COLOR_CLASS,
-} from '@/lib/timeline';
-import {STATUS_LABEL} from '@/lib/timeline-window';
+import {ABANDONED_OPACITY, MIN_TRACK_PX, TASK_COLOR_CLASS} from '@/lib/timeline';
 import type {ActivityTask, AgentLogin, AuditEntry, Connection} from '@/lib/types';
-import {Tooltip, TooltipContent, TooltipTrigger} from '@proxy/ui/components/tooltip';
 import {cn} from '@proxy/ui/lib/utils';
 
 // A lane's height and its bar's, and the room above and below an agent's lanes, in pixels. The
@@ -57,6 +51,9 @@ const MOTION_MS = 300;
 const SETTLE_MS = 1000;
 
 const LABEL = 'w-44 shrink-0 md:w-56';
+
+// What marks the chart beside the agents' names, for the wheel to measure (agent-timeline.tsx).
+export const CHART_ATTRIBUTE = 'data-timeline-chart';
 
 // What slides to its new lane: a change of top, or of the transform that places a bar's shapes.
 const MOVES = 'transition-[top,transform] duration-300 ease-in-out motion-reduce:transition-none';
@@ -127,13 +124,10 @@ export function ActivityTimeline({
 	}, [prepared, ahead, width, preferred]);
 	const timeline = layActivityTimeline(prepared, window, width, lanes, final !== null);
 	const rows = useSettledRows(timeline, laidAhead, window, preferred, setPreferred);
-	// The same from one drawing to the next, so the rows' requests are drawn again only as they change.
-	const titleOf = useCallback(
-		(taskId: string | null) => tasks.find((candidate) => candidate.id === taskId)?.title ?? null,
-		[tasks],
-	);
+	const titleOf = useTitleOf(tasks);
 	const nowAt = timeline.ticks.find((tick) => tick.label === 'Now');
-	// A row's box as it is drawn: full while shown, nothing while coming or going.
+	// A row's box as it is drawn: full while shown, nothing while coming or going, and then out of
+	// reach of the keyboard too, as it can't be seen.
 	const rowStyle = (row: ShownRow) => ({
 		height: row.phase === 'shown' ? laneHeight(row.lanes) : 0,
 		opacity: row.phase === 'shown' ? 1 : 0,
@@ -146,7 +140,12 @@ export function ActivityTimeline({
 			<div className="flex overflow-hidden rounded-lg border">
 				<div className={cn(LABEL, 'min-w-0 border-r bg-muted/40')}>
 					{rows.map((row) => (
-						<div key={row.agentId} className={rowClass} style={rowStyle(row)}>
+						<div
+							key={row.agentId}
+							className={rowClass}
+							style={rowStyle(row)}
+							inert={row.phase !== 'shown'}
+						>
 							<AgentLabel
 								row={row.row}
 								agent={agents.find((candidate) => candidate.id === row.agentId)}
@@ -157,7 +156,7 @@ export function ActivityTimeline({
 					<div className="h-7" />
 				</div>
 				<div className="min-w-0 flex-1 px-4">
-					<div ref={measure} className="relative">
+					<div ref={measure} className="relative" {...{[CHART_ATTRIBUTE]: ''}}>
 						<svg aria-hidden className="absolute inset-0 h-full w-full overflow-hidden">
 							{timeline.ticks.map((tick) => (
 								<line
@@ -171,7 +170,12 @@ export function ActivityTimeline({
 							))}
 						</svg>
 						{rows.map((row) => (
-							<div key={row.agentId} className={cn(rowClass, 'relative')} style={rowStyle(row)}>
+							<div
+								key={row.agentId}
+								className={cn(rowClass, 'relative')}
+								style={rowStyle(row)}
+								inert={row.phase !== 'shown'}
+							>
 								<svg
 									width={width}
 									height={laneHeight(row.lanes)}
@@ -503,73 +507,46 @@ function BarTarget({
 		top,
 		height: BAR_H,
 	};
-	const className = cn(
-		MOVES,
-		'absolute rounded-md hover:bg-foreground/5 focus-visible:outline-2 focus-visible:outline-ring',
-	);
+	const className = cn(MOVES, 'hover:bg-foreground/5');
 	if (!task) {
 		return null;
 	}
 	if (bar.tasks.length > 1) {
 		return (
-			<Tooltip disableHoverablePopup>
-				<TooltipTrigger
-					render={
-						<button
-							type="button"
-							onClick={() => onZoom(bar.fromMs, bar.toMs)}
-							aria-label={`Zoom in on ${bar.tasks.length} tasks`}
-							className={cn(className, 'cursor-zoom-in')}
-							style={style}
-						/>
-					}
-				/>
-				<TooltipContent className="pointer-events-none max-w-xs">
-					<ClusterDetails bar={bar} />
-				</TooltipContent>
-			</Tooltip>
-		);
-	}
-	return (
-		<Tooltip disableHoverablePopup>
-			<TooltipTrigger
-				render={
-					<Link
-						to={`/${org}/activity/tasks/${encodeURIComponent(task.id)}`}
-						state={{back: backTo, then: null}}
-						preventScrollReset
-						aria-label={task.title}
-						className={className}
-						style={style}
-					/>
-				}
-			/>
-			<TooltipContent className="pointer-events-none max-w-xs">
-				<TaskTooltip
-					task={task}
+			<ChartTarget
+				action={{onClick: () => onZoom(bar.fromMs, bar.toMs)}}
+				label={`Zoom in on ${bar.tasks.length} tasks`}
+				className={cn(className, 'cursor-zoom-in')}
+				style={style}
+			>
+				<TasksTooltip
+					heading={`${bar.tasks.length} tasks close together`}
 					status={bar.status}
 					durationMs={bar.durationMs}
 					requests={bar.requests}
-					subTasks={bar.subTasks}
+					tasks={bar.tasks}
+					hint="Click to zoom in on them"
 				/>
-			</TooltipContent>
-		</Tooltip>
-	);
-}
-
-// What a bar of several tasks says on hover, worked out only once it is open.
-function ClusterDetails({bar}: {bar: ActivityBar}) {
+			</ChartTarget>
+		);
+	}
 	return (
-		<span className="flex flex-col gap-1">
-			<span className="font-medium">{bar.tasks.length} tasks close together</span>
-			<span className="opacity-80">
-				{[
-					`${STATUS_LABEL[bar.status]} · ${formatDuration(bar.durationMs)}`,
-					...requestSummary(bar.requests),
-				].join(' · ')}
-			</span>
-			<TaskNames tasks={bar.tasks} />
-			<span>Click to zoom in on them</span>
-		</span>
+		<ChartTarget
+			action={{
+				to: `/${org}/activity/tasks/${encodeURIComponent(task.id)}`,
+				state: {back: backTo, then: null},
+			}}
+			label={task.title}
+			className={className}
+			style={style}
+		>
+			<TaskTooltip
+				task={task}
+				status={bar.status}
+				durationMs={bar.durationMs}
+				requests={bar.requests}
+				subTasks={bar.subTasks}
+			/>
+		</ChartTarget>
 	);
 }

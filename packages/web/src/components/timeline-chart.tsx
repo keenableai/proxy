@@ -1,5 +1,7 @@
-import {memo, type ReactNode, useId} from 'react';
+import {type CSSProperties, memo, type ReactNode, useId} from 'react';
+import {Link} from 'react-router';
 import type {RequestTooltipHandle} from '@/hooks/use-request-tooltip';
+import type {Back} from '@/lib/back';
 import {connectionLabel, describeEntry, locateEntry} from '@/lib/access';
 import {formatTime} from '@/lib/format';
 import {
@@ -194,7 +196,7 @@ export const RequestMarks = memo(function RequestMarks({
 const MAX_NAMED = 8;
 
 /** The tasks of a group, named one under another, the rest counted. */
-export function TaskNames({tasks}: {tasks: ActivityTask[]}) {
+function TaskNames({tasks}: {tasks: ActivityTask[]}) {
 	return (
 		<span className="flex flex-col opacity-80">
 			<ul className="list-disc pl-4">
@@ -231,6 +233,87 @@ export function TaskTooltip({
 			<span className="font-medium">{task.title}</span>
 			<span className="opacity-80">{parts.join(' · ')}</span>
 		</span>
+	);
+}
+
+/**
+ * What a bar or row of several tasks says on hover, worked out only once it is open: how many, how
+ * they went and which they are, and what clicking it does.
+ */
+export function TasksTooltip({
+	heading,
+	status,
+	durationMs,
+	requests,
+	tasks,
+	hint,
+}: {
+	heading: string;
+	status: TaskStatus;
+	durationMs: number;
+	requests: TimelineRequest[];
+	tasks: ActivityTask[];
+	hint?: string;
+}) {
+	return (
+		<span className="flex flex-col gap-1">
+			<span className="font-medium">{heading}</span>
+			<span className="opacity-80">
+				{[
+					`${STATUS_LABEL[status]} · ${formatDuration(durationMs)}`,
+					...requestSummary(requests),
+				].join(' · ')}
+			</span>
+			<TaskNames tasks={tasks} />
+			{hint && <span>{hint}</span>}
+		</span>
+	);
+}
+
+/**
+ * A hit target over a track, in the layer over the chart, saying more on hover or focus: a link to
+ * a task's page, coming back the way `state` says (lib/back.ts); a button; or, where it opens
+ * nothing, a stop for the keyboard all the same, so what it says can be reached.
+ */
+export function ChartTarget({
+	action,
+	label,
+	className,
+	style,
+	onHover,
+	children,
+}: {
+	action: {to: string; state: Back} | {onClick: () => void} | null;
+	label: string;
+	className?: string;
+	style: CSSProperties;
+	onHover?: (over: boolean) => void;
+	children: ReactNode;
+}) {
+	const shared = {
+		'aria-label': label,
+		className: cn(
+			'absolute rounded-md focus-visible:outline-2 focus-visible:outline-ring',
+			className,
+		),
+		style,
+		onMouseEnter: onHover && (() => onHover(true)),
+		onMouseLeave: onHover && (() => onHover(false)),
+	};
+	const trigger = () => {
+		if (action === null) {
+			return <span tabIndex={0} role="img" {...shared} />;
+		}
+		if ('to' in action) {
+			return <Link to={action.to} state={action.state} preventScrollReset {...shared} />;
+		}
+		return <button type="button" onClick={action.onClick} {...shared} />;
+	};
+	return (
+		<Tooltip disableHoverablePopup>
+			<TooltipTrigger render={trigger()} />
+			<TooltipContent className="pointer-events-none max-w-xs">{children}</TooltipContent>
+		</Tooltip>
 	);
 }
 
@@ -338,7 +421,7 @@ function RequestDetails({
 }
 
 // The least a request is wide to get a target of its own, where it isn't marked.
-export const MIN_TARGET_PX = 8;
+const MIN_TARGET_PX = 8;
 
 /**
  * The targets for a row's requests: every one that didn't go through, and every other where its

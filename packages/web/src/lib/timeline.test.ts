@@ -40,6 +40,21 @@ describe('formatDuration', () => {
 			),
 		).toEqual(['850ms', '1.2s', '12s', '2m 5s', '2m', '1h 4m', '2h', '2d 2h']);
 	});
+
+	test('rounds up into the next unit, not to sixty of the one before', () => {
+		expect(
+			[
+				999.6,
+				9_960,
+				59_600,
+				119_600,
+				3_599_700,
+				7_170_000,
+				47.999 * 3_600_000,
+				71.9 * 3_600_000,
+			].map(formatDuration),
+		).toEqual(['1s', '10s', '1m', '2m', '1h', '2h', '2d', '3d']);
+	});
 });
 
 describe('roughDuration', () => {
@@ -47,6 +62,14 @@ describe('roughDuration', () => {
 		expect(
 			[400, 40 * SECOND, 47.6 * MINUTE, 23.9 * 60 * MINUTE, 72 * 60 * MINUTE].map(roughDuration),
 		).toEqual(['1s', '40s', '48m', '24h', '3d']);
+	});
+
+	test('rounds up into the next unit', () => {
+		expect([59.6 * SECOND, 59.6 * MINUTE, 47.6 * 60 * MINUTE].map(roughDuration)).toEqual([
+			'1m',
+			'1h',
+			'2d',
+		]);
 	});
 });
 

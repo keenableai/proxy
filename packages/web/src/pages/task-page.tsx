@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useId, useState} from 'react';
 import {Link, useLoaderData, useLocation} from 'react-router';
 import {getTaskRun} from '@/client/agents-client';
 import type {TaskRun} from '@/client/schemas';
@@ -56,6 +56,7 @@ function TaskRunPage({
 	const [run, setRun] = useState(initial);
 	const [opened, setOpened] = useState<AuditEntry | null>(null);
 	const [shown, setShown] = useState<ShownText>('goal');
+	const textId = useId();
 	// Where the page was come to from, where that page said (lib/back.ts): the home page with its
 	// window as it was, or the task this one was handed on from; else the activity log, at the task.
 	const cameFrom = backOf(location);
@@ -158,9 +159,20 @@ function TaskRunPage({
 							</>
 						)}
 					</p>
-					<TextSwitch shown={shown} hasOutcome={task.outcome !== null} onChange={setShown} />
+					<TextSwitch
+						id={textId}
+						shown={shown}
+						hasOutcome={task.outcome !== null}
+						onChange={setShown}
+					/>
 				</div>
-				<TextPanel shown={shown} goal={task.goal} outcome={task.outcome} className="text-sm" />
+				<TextPanel
+					id={textId}
+					shown={shown}
+					goal={task.goal}
+					outcome={task.outcome}
+					className="text-sm"
+				/>
 				<RunTimeline
 					tasks={run.tasks}
 					entries={run.entries}

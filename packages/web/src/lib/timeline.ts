@@ -30,41 +30,47 @@ export const MIN_TRACK_PX = 6;
 
 /** "850ms", "1.2s", "5s", "12s", "2m 5s", "1h 4m", "2d 3h": how long something took, as short as it reads. */
 export function formatDuration(ms: number): string {
-	if (ms < SECOND) {
+	// Each unit is rounded to as a whole first, so it is split without carrying, as "1m 60s" would.
+	if (Math.round(ms) < SECOND) {
 		return `${Math.round(ms)}ms`;
 	}
-	if (ms < 10 * SECOND) {
-		const seconds = ms / SECOND;
-		return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
+	const tenths = Math.round(ms / (SECOND / 10));
+	if (tenths < 100) {
+		return tenths % 10 === 0 ? `${tenths / 10}s` : `${(tenths / 10).toFixed(1)}s`;
 	}
-	if (ms < MINUTE) {
-		return `${Math.round(ms / SECOND)}s`;
+	const seconds = Math.round(ms / SECOND);
+	if (seconds < 60) {
+		return `${seconds}s`;
 	}
-	if (ms < HOUR) {
-		const seconds = Math.round((ms % MINUTE) / SECOND);
-		const minutes = Math.floor(ms / MINUTE);
-		return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+	if (seconds < 60 * 60) {
+		return joined(Math.floor(seconds / 60), 'm', seconds % 60, 's');
 	}
-	if (ms < 48 * HOUR) {
-		const minutes = Math.round((ms % HOUR) / MINUTE);
-		const hours = Math.floor(ms / HOUR);
-		return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+	const minutes = Math.round(ms / MINUTE);
+	if (minutes < 48 * 60) {
+		return joined(Math.floor(minutes / 60), 'h', minutes % 60, 'm');
 	}
-	const hours = Math.round((ms % (24 * HOUR)) / HOUR);
-	const days = Math.floor(ms / (24 * HOUR));
-	return hours === 0 ? `${days}d` : `${days}d ${hours}h`;
+	const hours = Math.round(ms / HOUR);
+	return joined(Math.floor(hours / 24), 'd', hours % 24, 'h');
+}
+
+// "2m 5s", or "2m" where there is none of the smaller unit.
+function joined(large: number, largeUnit: string, small: number, smallUnit: string): string {
+	return small === 0 ? `${large}${largeUnit}` : `${large}${largeUnit} ${small}${smallUnit}`;
 }
 
 /** "40s", "48m", "3h", "2d": about how long, in one unit, for where there is no room for more. */
 export function roughDuration(ms: number): string {
-	if (ms < MINUTE) {
-		return `${Math.max(Math.round(ms / SECOND), 1)}s`;
+	const seconds = Math.round(ms / SECOND);
+	if (seconds < 60) {
+		return `${Math.max(seconds, 1)}s`;
 	}
-	if (ms < HOUR) {
-		return `${Math.round(ms / MINUTE)}m`;
+	const minutes = Math.round(ms / MINUTE);
+	if (minutes < 60) {
+		return `${minutes}m`;
 	}
-	if (ms < 48 * HOUR) {
-		return `${Math.round(ms / HOUR)}h`;
+	const hours = Math.round(ms / HOUR);
+	if (hours < 48) {
+		return `${hours}h`;
 	}
 	return `${Math.round(ms / (24 * HOUR))}d`;
 }
