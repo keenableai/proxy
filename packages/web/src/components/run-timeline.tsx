@@ -5,7 +5,7 @@ import {
 	AxisLabels,
 	ChartLegend,
 	HatchDefs,
-	Pulse,
+	Shimmer,
 	RequestMarks,
 	RequestTargets,
 	TaskNames,
@@ -174,6 +174,14 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 											dashed={row.status === 'abandoned'}
 										/>
 									))}
+									{row.status === 'running' && (
+										<Shimmer
+											span={row}
+											y={TRACK_TOP}
+											height={TRACK_H}
+											clippedEnd={row.end >= width - 1}
+										/>
+									)}
 									<RequestMarks requests={row.requests} y={TRACK_TOP} height={TRACK_H} />
 									{row.waiting.map((stretch) => (
 										<rect
@@ -186,9 +194,6 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 											fill={`url(#${hatch})`}
 										/>
 									))}
-									{row.status === 'running' && (
-										<Pulse x={Math.min(row.end, width - 4)} y={ROW_H / 2} />
-									)}
 								</g>
 							))}
 							<Handoffs timeline={timeline} isActive={isActive} />

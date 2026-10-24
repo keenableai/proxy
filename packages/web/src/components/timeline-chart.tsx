@@ -1,4 +1,4 @@
-import type {ReactNode} from 'react';
+import {type ReactNode, useId} from 'react';
 import {connectionLabel, describeEntry, locateEntry} from '@/lib/access';
 import {formatTime} from '@/lib/format';
 import {
@@ -49,6 +49,18 @@ export function HatchDefs({id}: {id: string}) {
 	);
 }
 
+// Where a track is drawn: run on past the chart's edge where the chart cuts it off, so that side
+// stays square, and never narrower than the least.
+function trackBox(
+	span: Span,
+	clippedStart: boolean,
+	clippedEnd: boolean,
+): {x: number; width: number} {
+	const start = clippedStart ? span.start - 8 : span.start;
+	const end = clippedEnd ? span.end + 8 : span.end;
+	return {x: start, width: Math.max(end - start, MIN_TRACK_PX)};
+}
+
 /** A task's track: a rounded bar, square where it runs past the chart's edge. */
 export function Track({
 	span,
@@ -67,14 +79,12 @@ export function Track({
 	opacity?: number;
 	dashed?: boolean;
 }) {
-	// Run on past the edge, where the chart cuts it off, so that side stays square.
-	const start = clippedStart ? span.start - 8 : span.start;
-	const end = clippedEnd ? span.end + 8 : span.end;
+	const {x, width} = trackBox(span, clippedStart, clippedEnd);
 	return (
 		<rect
-			x={start}
+			x={x}
 			y={y}
-			width={Math.max(end - start, MIN_TRACK_PX)}
+			width={width}
 			height={height}
 			rx={4}
 			fill="currentColor"
@@ -83,6 +93,61 @@ export function Track({
 			strokeOpacity={0.5}
 			strokeDasharray={dashed ? '3 3' : undefined}
 		/>
+	);
+}
+
+// The shimmer's band, at most, how fast it sweeps, and how much of each turn it rests after a sweep.
+const SHIMMER_BAND_PX = 96;
+const SHIMMER_PX_PER_S = 220;
+const SHIMMER_MIN_S = 1.2;
+const SHIMMER_REST = 0.35;
+
+/**
+ * A light that sweeps along a task's track while it is under way, again and again, a band of the
+ * task's color a little stronger than the track, resting a moment after each sweep: at the same
+ * speed on every track, so a long one takes longer, and with a band no wider than the track. None
+ * where motion is to be kept down.
+ */
+export function Shimmer({
+	span,
+	y,
+	height,
+	clippedStart = false,
+	clippedEnd = false,
+}: {
+	span: Span;
+	y: number;
+	height: number;
+	clippedStart?: boolean;
+	clippedEnd?: boolean;
+}) {
+	const id = useId();
+	if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+		return null;
+	}
+	const {x, width} = trackBox(span, clippedStart, clippedEnd);
+	const band = Math.min(SHIMMER_BAND_PX, width);
+	const travel = width + band;
+	const sweepS = Math.max(travel / SHIMMER_PX_PER_S, SHIMMER_MIN_S);
+	return (
+		<>
+			<defs>
+				<linearGradient id={id} gradientUnits="userSpaceOnUse" x1={x - band} x2={x} y1={0} y2={0}>
+					<stop offset="0" stopColor="currentColor" stopOpacity={0} />
+					<stop offset="0.5" stopColor="currentColor" stopOpacity={0.3} />
+					<stop offset="1" stopColor="currentColor" stopOpacity={0} />
+					<animateTransform
+						attributeName="gradientTransform"
+						type="translate"
+						values={`0 0; ${travel} 0; ${travel} 0`}
+						keyTimes={`0; ${1 - SHIMMER_REST}; 1`}
+						dur={`${sweepS / (1 - SHIMMER_REST)}s`}
+						repeatCount="indefinite"
+					/>
+				</linearGradient>
+			</defs>
+			<rect x={x} y={y} width={width} height={height} rx={4} fill={`url(#${id})`} />
+		</>
 	);
 }
 
@@ -121,19 +186,6 @@ export function RequestMarks({
 			{marks('denied')}
 			{marks('failed')}
 		</>
-	);
-}
-
-/** A dot at the end of a task's track while it is under way. */
-export function Pulse({x, y}: {x: number; y: number}) {
-	return (
-		<circle
-			cx={x}
-			cy={y}
-			r={3.5}
-			fill="currentColor"
-			className="animate-pulse motion-reduce:animate-none"
-		/>
 	);
 }
 
@@ -320,7 +372,7 @@ type LegendRow = {status: TaskStatus; requests: TimelineRequest[]; waiting?: Spa
 
 /**
  * The key to the marks on a chart, only for those on it: a task's track with its requests always,
- * and the hatching, the pulse, the dashed track and the amber and red requests while any row has
+ * and the hatching, the shimmer, the dashed track and the amber and red requests while any row has
  * them. The rest
  * the chart tells itself, on hover or on the axis.
  */
@@ -373,7 +425,7 @@ function TrackSwatch({
 		<svg width="24" height="12" className={cn('block', TASK_COLOR_CLASS)} aria-hidden>
 			{hatched && <HatchDefs id="legend-hatch" />}
 			<Track
-				span={{start: 0, end: running ? 20 : 24}}
+				span={{start: 0, end: 24}}
 				y={1}
 				height={10}
 				opacity={abandoned ? ABANDONED_OPACITY : undefined}
@@ -382,7 +434,7 @@ function TrackSwatch({
 			{requests && <rect x="3" y="1" width="7" height="10" rx="2" fill="currentColor" />}
 			{requests && <rect x="14" y="1" width="4" height="10" rx="2" fill="currentColor" />}
 			{hatched && <rect y="1" width="24" height="10" rx="3" fill="url(#legend-hatch)" />}
-			{running && <Pulse x={20} y={6} />}
+			{running && <Shimmer span={{start: 0, end: 24}} y={1} height={10} />}
 			{outcome && (
 				<rect x="9" y="1" width="5" height="10" rx="2" className={OUTCOME_FILL[outcome]} />
 			)}

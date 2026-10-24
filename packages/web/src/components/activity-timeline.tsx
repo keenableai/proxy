@@ -4,7 +4,7 @@ import {AgentLogo} from '@/components/brand-logo';
 import {
 	AxisLabels,
 	ChartLegend,
-	Pulse,
+	Shimmer,
 	RequestMarks,
 	RequestTargets,
 	TaskNames,
@@ -193,14 +193,20 @@ export function ActivityTimeline({
 													opacity={bar.status === 'abandoned' ? ABANDONED_OPACITY : undefined}
 													dashed={bar.status === 'abandoned'}
 												/>
+												{bar.status === 'running' && (
+													<Shimmer
+														span={bar}
+														y={0}
+														height={BAR_H}
+														clippedStart={bar.clippedStart}
+														clippedEnd={bar.clippedEnd}
+													/>
+												)}
 												<RequestMarks
 													requests={bar.requests}
 													y={BAR_H - REQUEST_INSET - REQUEST_H}
 													height={REQUEST_H}
 												/>
-												{bar.status === 'running' && !bar.clippedEnd && (
-													<Pulse x={bar.end} y={BAR_H / 2} />
-												)}
 											</g>
 										</g>
 									))}
