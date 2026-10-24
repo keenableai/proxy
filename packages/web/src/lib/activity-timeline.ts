@@ -81,9 +81,15 @@ export function buildActivityTimeline(
 	const time = (iso: string) => new Date(iso).getTime();
 	const ofTask = new Map<string, AuditEntry[]>();
 	for (const entry of entries) {
-		if (entry.taskId !== null) {
-			ofTask.set(entry.taskId, [...(ofTask.get(entry.taskId) ?? []), entry]);
+		if (entry.taskId === null) {
+			continue;
 		}
+		const own = ofTask.get(entry.taskId);
+		if (own) {
+			own.push(entry);
+			continue;
+		}
+		ofTask.set(entry.taskId, [entry]);
 	}
 	const endOf = (task: ActivityTask) =>
 		(endedAt(task, ofTask.get(task.id) ?? [], now) ?? now).getTime();
@@ -94,9 +100,20 @@ export function buildActivityTimeline(
 	const ids = new Set(allTasks.map((task) => task.id));
 	// The tasks agents were given themselves, each with what it handed on rolled in.
 	const tops = allTasks.filter((task) => task.parentId === null || !ids.has(task.parentId));
-	const below = (parentId: string) => allTasks.filter((task) => task.parentId === parentId);
+	const children = new Map<string, ActivityTask[]>();
+	for (const task of allTasks) {
+		if (task.parentId === null) {
+			continue;
+		}
+		const siblings = children.get(task.parentId);
+		if (siblings) {
+			siblings.push(task);
+			continue;
+		}
+		children.set(task.parentId, [task]);
+	}
 	const descendants = (task: ActivityTask): ActivityTask[] =>
-		below(task.id).flatMap((child) => [child, ...descendants(child)]);
+		(children.get(task.id) ?? []).flatMap((child) => [child, ...descendants(child)]);
 	const bars = tops
 		.map((task): ActivityBar => {
 			const tree = [task, ...descendants(task)];
@@ -116,9 +133,7 @@ export function buildActivityTimeline(
 				clippedStart: start < from,
 				clippedEnd: end > to,
 				requests: layRequests(
-					entries.filter(
-						(entry) => entry.taskId !== null && tree.some((one) => one.id === entry.taskId),
-					),
+					tree.flatMap((one) => ofTask.get(one.id) ?? []),
 					px,
 					from,
 					to,

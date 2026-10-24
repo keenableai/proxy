@@ -27,6 +27,7 @@ import {
 	homeLoader,
 	inviteLoader,
 	membersLoader,
+	shouldRevalidateHome,
 	taskLoader,
 	vaultLoader,
 	welcomeConnectionLoader,
@@ -234,7 +235,12 @@ export const router = createBrowserRouter([
 		element: <HumanSide />,
 		errorElement: <RouteError />,
 		children: [
-			{index: true, loader: homeLoader, element: <HomePage />},
+			{
+				index: true,
+				loader: homeLoader,
+				shouldRevalidate: shouldRevalidateHome,
+				element: <HomePage />,
+			},
 			{path: '/:org/connections', loader: connectionsLoader, element: <ConnectionsPage />},
 			{path: '/:org/connections/new', loader: addConnectionLoader, element: <AddConnectionPage />},
 			{path: '/:org/connections/new/email', element: <AddEmailPage />},

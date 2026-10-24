@@ -1,5 +1,7 @@
 import {useEffect, useState} from 'react';
-import {Link, useLoaderData, useLocation, useRevalidator} from 'react-router';
+import {Link, useLoaderData, useLocation} from 'react-router';
+import {getTaskRun} from '@/client/agents-client';
+import type {TaskRun} from '@/client/schemas';
 import {AppShell, PageTitle} from '@/components/app-shell';
 import {AuditEntryDialog} from '@/components/audit-entry-dialog';
 import {AuditList} from '@/components/audit-list';
@@ -12,8 +14,8 @@ import {useOrgSlug} from '@/hooks/use-org';
 import {backFrom, backOf} from '@/lib/back';
 import {endedAt, STATUS_LABEL, taskStatus} from '@/lib/timeline-window';
 import {counted, formatDateTime} from '@/lib/format';
-import {formatDuration} from '@/lib/timeline';
-import type {AuditEntry} from '@/lib/types';
+import {formatDuration, outcomeSummary} from '@/lib/timeline';
+import type {AgentLogin, AuditEntry, Connection} from '@/lib/types';
 import type {taskLoader} from '@/loaders';
 import {Badge} from '@proxy/ui/components/badge';
 import {Tooltip, TooltipContent, TooltipTrigger} from '@proxy/ui/components/tooltip';
@@ -31,30 +33,61 @@ const REFRESH_MS = 5 * 1000;
 export function TaskPage() {
 	const org = useOrgSlug();
 	const {run, agents, connections} = useLoaderData<typeof taskLoader>();
-	const revalidator = useRevalidator();
+	if (!run) {
+		return <NotFound what="task" back={`/${org}/activity`} backLabel="Back to activity" />;
+	}
+	// Keyed by the task, so following a link to another task's page starts it afresh, its timeline
+	// laid out and its description shown, rather than as the last task's was left.
+	return <TaskRunPage key={run.task} initial={run} agents={agents} connections={connections} />;
+}
+
+function TaskRunPage({
+	initial,
+	agents,
+	connections,
+}: {
+	initial: TaskRun;
+	agents: AgentLogin[];
+	connections: Connection[];
+}) {
+	const org = useOrgSlug();
 	const location = useLocation();
+	// The run shown: the first came with the page, and every later reading of it replaces it.
+	const [run, setRun] = useState(initial);
 	const [opened, setOpened] = useState<AuditEntry | null>(null);
 	const [shown, setShown] = useState<ShownText>('goal');
 	// Where the page was come to from, where that page said (lib/back.ts): the home page with its
 	// window as it was, or the task this one was handed on from; else the activity log, at the task.
-	const cameFrom = backOf(location.state);
-	const task = run?.tasks.find((candidate) => candidate.id === run.task);
-	const running =
-		run?.tasks.some((candidate) => taskStatus(candidate, new Date(run.now)) === 'running') ?? false;
+	const cameFrom = backOf(location);
+	const task = run.tasks.find((candidate) => candidate.id === run.task);
+	const running = run.tasks.some(
+		(candidate) => taskStatus(candidate, new Date(run.now)) === 'running',
+	);
 
+	// Only the run is read again: the connections and agents that name its requests stay as the
+	// page found them.
 	useEffect(() => {
 		if (!running) {
 			return;
 		}
-		const timer = setInterval(() => {
-			if (document.visibilityState === 'visible') {
-				void revalidator.revalidate();
+		let gone = false;
+		const timer = setInterval(async () => {
+			if (document.visibilityState !== 'visible') {
+				return;
 			}
+			const result = await getTaskRun(org, run.task);
+			if (gone || result.isErr()) {
+				return;
+			}
+			setRun(result.value);
 		}, REFRESH_MS);
-		return () => clearInterval(timer);
-	}, [running, revalidator]);
+		return () => {
+			gone = true;
+			clearInterval(timer);
+		};
+	}, [running, org, run.task]);
 
-	if (!run || !task) {
+	if (!task) {
 		return <NotFound what="task" back={`/${org}/activity`} backLabel="Back to activity" />;
 	}
 
@@ -66,7 +99,7 @@ export function TaskPage() {
 	const summary = [
 		formatDuration(ended.getTime() - new Date(task.startedAt).getTime()),
 		counted(own.length, 'request'),
-		...countOutcomes(own),
+		...outcomeSummary(own),
 	];
 	return (
 		<AppShell
@@ -151,14 +184,4 @@ export function TaskPage() {
 			/>
 		</AppShell>
 	);
-}
-
-// "2 blocked", "1 failed": what didn't go through, where anything didn't.
-function countOutcomes(entries: AuditEntry[]): string[] {
-	const blocked = entries.filter((entry) => entry.outcome === 'denied').length;
-	const failed = entries.filter((entry) => entry.outcome === 'failed').length;
-	return [
-		...(blocked > 0 ? [`${blocked} blocked`] : []),
-		...(failed > 0 ? [`${failed} failed`] : []),
-	];
 }

@@ -247,27 +247,26 @@ export function AgentTimeline({
 	};
 
 	// Once the window settles, it is written to the address, in place of the entry there, so the
-	// page is found as it was on coming back; the default window leaves the address clean.
+	// page is found as it was on coming back; the default window leaves the address clean. Only
+	// where it changed: writing the address as it is would read the whole page again (router.tsx).
 	useEffect(() => {
 		const timer = setTimeout(() => {
-			setParams(
-				(current) => {
-					const next = new URLSearchParams(current);
-					next.delete('window');
-					next.delete('end');
-					if (minutes !== DEFAULT_MINUTES) {
-						next.set('window', String(minutes));
-					}
-					if (end !== null) {
-						next.set('end', String(Math.round(end)));
-					}
-					return next;
-				},
-				{replace: true},
-			);
+			const next = new URLSearchParams(location.search);
+			next.delete('window');
+			next.delete('end');
+			if (minutes !== DEFAULT_MINUTES) {
+				next.set('window', String(minutes));
+			}
+			if (end !== null) {
+				next.set('end', String(Math.round(end)));
+			}
+			if (next.toString() === new URLSearchParams(location.search).toString()) {
+				return;
+			}
+			setParams(next, {replace: true});
 		}, ZOOM_SETTLE_MS);
 		return () => clearTimeout(timer);
-	}, [minutes, end, setParams]);
+	}, [minutes, end, location.search, setParams]);
 	// The window's length as read: whole minutes, which it is but for a moment while zooming in.
 	const wholeMinutes = Math.round(minutes);
 	// Where a task's page comes back to: this page, with the window as it is now.
@@ -285,16 +284,14 @@ export function AgentTimeline({
 	const now = new Date(answer.now);
 	const to = end === null ? now : new Date(Math.min(end, now.getTime()));
 	const window = {from: windowStart(minutes, to), to};
-	const inWindow = answer.tasks.some(
-		(task) =>
-			(
-				endedAt(
-					task,
-					answer.entries.filter((entry) => entry.taskId === task.id),
-					now,
-				) ?? now
-			).getTime() >= window.from.getTime(),
-	);
+	// A task is in the window where it started before the window ends and ended after it begins.
+	const inWindow = answer.tasks.some((task) => {
+		if (new Date(task.startedAt).getTime() > window.to.getTime()) {
+			return false;
+		}
+		const own = answer.entries.filter((entry) => entry.taskId === task.id);
+		return (endedAt(task, own, now) ?? now).getTime() >= window.from.getTime();
+	});
 	const preset = presetOf(wholeMinutes);
 
 	return (

@@ -17,7 +17,7 @@ import {VAULT_INTEGRATION_ID} from '@proxy/integrations';
 import {LOADED_MINUTES, windowStart} from '@/lib/timeline-window';
 import {unwrapLoaderResult, unwrapOrNull} from '@/lib/loader-utils';
 import {pendingAgent} from '@/lib/pending-agent';
-import {redirect} from 'react-router';
+import {redirect, type ShouldRevalidateFunctionArgs} from 'react-router';
 
 // The human side's pages, each loaded from the api on arrival and again after every change. Every
 // page is in an organization, named by its slug in the address (`params.org`), which its api
@@ -44,6 +44,28 @@ export async function homeLoader(args: OrgParams) {
 		agents: agents.map((answer) => answer.agents).unwrapOr([]),
 		activity: activity.unwrapOr(null),
 	};
+}
+
+// The timeline writes its window to the address as it moves (agent-timeline.tsx) and reads what
+// that needs itself, so a change of the window alone doesn't load the page again.
+export function shouldRevalidateHome({
+	currentUrl,
+	nextUrl,
+	defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+	if (currentUrl.pathname !== nextUrl.pathname || currentUrl.search === nextUrl.search) {
+		return defaultShouldRevalidate;
+	}
+	const withoutWindow = (url: URL) => {
+		const params = new URLSearchParams(url.search);
+		params.delete('window');
+		params.delete('end');
+		return params.toString();
+	};
+	if (withoutWindow(currentUrl) !== withoutWindow(nextUrl)) {
+		return defaultShouldRevalidate;
+	}
+	return false;
 }
 
 export async function connectionsLoader(args: OrgParams) {

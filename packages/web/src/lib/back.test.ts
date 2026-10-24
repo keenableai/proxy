@@ -3,13 +3,15 @@ import {backFrom, backOf} from './back';
 
 describe('backOf', () => {
 	test('reads the way back from a page’s state, as far as it goes', () => {
-		expect(backOf(null)).toBeNull();
-		expect(backOf({back: 3})).toBeNull();
-		expect(backOf({back: '/w/activity?window=60'})).toEqual({
+		expect(backOf({state: null})).toBeNull();
+		expect(backOf({state: {back: 3}})).toBeNull();
+		expect(backOf({state: {back: '/w/activity?window=60'}})).toEqual({
 			back: '/w/activity?window=60',
 			then: null,
 		});
-		expect(backOf({back: '/w/activity/tasks/t1', then: {back: '/w?end=5', then: null}})).toEqual({
+		expect(
+			backOf({state: {back: '/w/activity/tasks/t1', then: {back: '/w?end=5', then: null}}}),
+		).toEqual({
 			back: '/w/activity/tasks/t1',
 			then: {back: '/w?end=5', then: null},
 		});

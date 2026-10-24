@@ -134,18 +134,22 @@ export async function listAuditEntries(
 	);
 }
 
-/** The requests the viewer sees made for any of `taskIds`, in the order they were made, the first `take`. */
+/**
+ * The requests the viewer sees made for any of `taskIds`, in the order they were made: the latest
+ * `take`, so a long task keeps its newest requests rather than its first.
+ */
 export async function listTaskEntries(
 	viewer: Viewer,
 	taskIds: string[],
 	take: number,
 ): Promise<Result<AuditEntryRow[], ApiError>> {
-	return wrapDb(() =>
+	const rows = await wrapDb(() =>
 		db.auditEntry.findMany({
 			where: {...visibleTo(viewer), taskId: {in: taskIds}},
-			orderBy: {createdAt: 'asc'},
+			orderBy: {createdAt: 'desc'},
 			take,
 			select: entrySelect,
 		}),
 	);
+	return rows.map((newestFirst) => newestFirst.toReversed());
 }

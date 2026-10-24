@@ -1,4 +1,4 @@
-import {Fragment, useEffect, useRef, useState} from 'react';
+import {Fragment, useEffect, useMemo, useRef, useState} from 'react';
 import {Link} from 'react-router';
 import {AgentLogo} from '@/components/brand-logo';
 import {
@@ -106,11 +106,18 @@ export function ActivityTimeline({
 	// moment rather than opening lanes that would be empty again at the end: the layout where the
 	// zoom ends is made first, afresh, so its lanes are the fewest, and the lanes it gives go before
 	// every other preference.
-	const destination = ahead.at(-1);
-	const final = destination
-		? buildActivityTimeline(tasks, entries, new Date(now), destination, width)
-		: null;
-	const lanes = final ? new Map([...preferred, ...lanesEverywhere(final)]) : preferred;
+	// What the zoom's way gives is the same on every frame of it, so it is laid out once.
+	const {final, lanes, laidAhead} = useMemo(() => {
+		const destination = ahead.at(-1);
+		const final = destination
+			? buildActivityTimeline(tasks, entries, new Date(now), destination, width)
+			: null;
+		const lanes = final ? new Map([...preferred, ...lanesEverywhere(final)]) : preferred;
+		const laidAhead = ahead.map((coming) =>
+			buildActivityTimeline(tasks, entries, new Date(now), coming, width, lanes, true),
+		);
+		return {final, lanes, laidAhead};
+	}, [tasks, entries, now, ahead, width, preferred]);
 	const timeline = buildActivityTimeline(
 		tasks,
 		entries,
@@ -119,9 +126,6 @@ export function ActivityTimeline({
 		width,
 		lanes,
 		final !== null,
-	);
-	const laidAhead = ahead.map((coming) =>
-		buildActivityTimeline(tasks, entries, new Date(now), coming, width, lanes, true),
 	);
 	const rows = useSettledRows(timeline, laidAhead, window, preferred, setPreferred);
 	const titleOf = (taskId: string | null) =>

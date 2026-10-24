@@ -91,10 +91,17 @@ export function requestTimes(entry: AuditEntry): {from: number; to: number} {
 
 /** "3 requests · 1 blocked · 2 failed": what was made for a task, where anything was. */
 export function requestSummary(requests: TimelineRequest[]): string[] {
-	const blocked = requests.filter((request) => request.entry.outcome === 'denied').length;
-	const failed = requests.filter((request) => request.entry.outcome === 'failed').length;
 	return [
 		...(requests.length > 0 ? [`${requests.length} requests`] : []),
+		...outcomeSummary(requests.map((request) => request.entry)),
+	];
+}
+
+/** "2 blocked · 1 failed": what of `entries` didn't go through, where anything didn't. */
+export function outcomeSummary(entries: AuditEntry[]): string[] {
+	const blocked = entries.filter((entry) => entry.outcome === 'denied').length;
+	const failed = entries.filter((entry) => entry.outcome === 'failed').length;
+	return [
 		...(blocked > 0 ? [`${blocked} blocked`] : []),
 		...(failed > 0 ? [`${failed} failed`] : []),
 	];

@@ -1,4 +1,4 @@
-import {useCallback, useState} from 'react';
+import {AnimatedHeight} from '@/components/animated-height';
 import {Tooltip, TooltipContent, TooltipTrigger} from '@proxy/ui/components/tooltip';
 import {cn} from '@proxy/ui/lib/utils';
 
@@ -93,47 +93,16 @@ export function TextPanel({
 	outcome: string | null;
 	className?: string;
 }) {
-	const [measure, height] = useContentHeight();
 	if (outcome === null) {
 		return <p className={className}>{goal}</p>;
 	}
 	return (
-		<div
-			role="tabpanel"
-			className={cn(
-				'overflow-hidden transition-[height] duration-200 ease-out motion-reduce:transition-none',
-				className,
-			)}
-			style={{height}}
-		>
-			<p
-				key={shown}
-				ref={measure}
-				className="animate-in fade-in-0 duration-200 motion-reduce:animate-none"
-			>
-				{shown === 'goal' ? goal : outcome}
-			</p>
+		<div role="tabpanel" className={className}>
+			<AnimatedHeight open>
+				<p key={shown} className="animate-in fade-in-0 duration-200 motion-reduce:animate-none">
+					{shown === 'goal' ? goal : outcome}
+				</p>
+			</AnimatedHeight>
 		</div>
 	);
-}
-
-// The height of the element the ref is put on, measured as it is swapped for another or resizes,
-// for the box around it to animate to; none until it is first measured, when the box is as tall
-// as its content.
-function useContentHeight(): [(element: HTMLElement | null) => void, number | undefined] {
-	const [height, setHeight] = useState<number | undefined>(undefined);
-	const measure = useCallback((element: HTMLElement | null) => {
-		if (!element) {
-			return;
-		}
-		const read = () => setHeight(element.offsetHeight);
-		read();
-		if (typeof ResizeObserver === 'undefined') {
-			return;
-		}
-		const observer = new ResizeObserver(read);
-		observer.observe(element);
-		return () => observer.disconnect();
-	}, []);
-	return [measure, height];
 }

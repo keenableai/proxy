@@ -163,9 +163,9 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 											opacity={row.status === 'abandoned' ? ABANDONED_OPACITY / 2 : 0.08}
 										/>
 									)}
-									{row.members.map((member) => (
+									{row.members.map((member, memberIndex) => (
 										<Track
-											key={member.start}
+											key={row.tasks[memberIndex]?.id ?? memberIndex}
 											span={member}
 											y={TRACK_TOP}
 											height={TRACK_H}
