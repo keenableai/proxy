@@ -1,3 +1,4 @@
+import {counted} from '@/lib/format';
 import type {AuditEntry} from '@/lib/types';
 
 // What the two timelines share: the task page's, of one run, and the home page's, of every agent
@@ -92,7 +93,7 @@ export function requestTimes(entry: AuditEntry): {from: number; to: number} {
 /** "3 requests · 1 blocked · 2 failed": what was made for a task, where anything was. */
 export function requestSummary(requests: TimelineRequest[]): string[] {
 	return [
-		...(requests.length > 0 ? [`${requests.length} requests`] : []),
+		...(requests.length > 0 ? [counted(requests.length, 'request')] : []),
 		...outcomeSummary(requests.map((request) => request.entry)),
 	];
 }

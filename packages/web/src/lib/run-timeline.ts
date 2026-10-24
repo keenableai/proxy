@@ -249,7 +249,12 @@ export function buildRunTimeline(
 		if (entry.taskId === null || !byId.has(entry.taskId)) {
 			continue;
 		}
-		ofTask.set(entry.taskId, [...(ofTask.get(entry.taskId) ?? []), entry]);
+		const own = ofTask.get(entry.taskId);
+		if (own) {
+			own.push(entry);
+			continue;
+		}
+		ofTask.set(entry.taskId, [entry]);
 	}
 	const endOf = (task: ActivityTask) =>
 		(endedAt(task, ofTask.get(task.id) ?? [], now) ?? now).getTime();
@@ -282,12 +287,31 @@ export function buildRunTimeline(
 
 	const parentOf = (task: ActivityTask) =>
 		task.parentId !== null && byId.has(task.parentId) ? task.parentId : null;
-	const below = (parentId: string | null) =>
-		tasks
-			.filter((task) => parentOf(task) === parentId)
-			.sort((a, b) => time(a.startedAt) - time(b.startedAt) || a.id.localeCompare(b.id));
-	const descendants = (task: ActivityTask): ActivityTask[] =>
-		below(task.id).flatMap((child) => [child, ...descendants(child)]);
+	// The tasks handed on from each, in the order started, under null those at the top; and every
+	// task under each at any depth, worked out once.
+	const children = new Map<string | null, ActivityTask[]>();
+	for (const task of [...tasks].sort(
+		(a, b) => time(a.startedAt) - time(b.startedAt) || a.id.localeCompare(b.id),
+	)) {
+		const parentId = parentOf(task);
+		const siblings = children.get(parentId);
+		if (siblings) {
+			siblings.push(task);
+			continue;
+		}
+		children.set(parentId, [task]);
+	}
+	const below = (parentId: string | null) => children.get(parentId) ?? [];
+	const under = new Map<string, ActivityTask[]>();
+	const descendants = (task: ActivityTask): ActivityTask[] => {
+		const known = under.get(task.id);
+		if (known) {
+			return known;
+		}
+		const found = below(task.id).flatMap((child) => [child, ...descendants(child)]);
+		under.set(task.id, found);
+		return found;
+	};
 	const requestsOf = (of: ActivityTask[]) =>
 		layRequests(
 			of.flatMap((task) => ofTask.get(task.id) ?? []),

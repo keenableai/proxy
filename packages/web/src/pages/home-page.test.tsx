@@ -48,6 +48,7 @@ const agent = (id: string, providerId: string, name: string, revokedAt: string |
 const activity: ActivityTimeline = {
 	now: '2026-10-16T12:00:00.000Z',
 	from: '2026-10-15T12:00:00.000Z',
+	to: '2026-10-16T12:00:00.000Z',
 	tasks: [
 		{
 			id: 't1',

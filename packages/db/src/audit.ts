@@ -1,4 +1,4 @@
-import type {AuditOutcome, AuditVia} from '@prisma/client';
+import {type AuditOutcome, type AuditVia, Prisma} from '@prisma/client';
 import type {Result} from 'ts-results-es';
 
 import {type ApiError, wrapDb} from '@proxy/utils';
@@ -135,21 +135,67 @@ export async function listAuditEntries(
 }
 
 /**
- * The requests the viewer sees made for any of `taskIds`, in the order they were made: the latest
- * `take`, so a long task keeps its newest requests rather than its first.
+ * The requests the viewer sees made for any of `taskIds`, since `since` where given, in the order
+ * they were made: at most `take` in all, shared out among the tasks, so every task keeps its newest
+ * requests, all of them where they fit and its newest share of them where it has more.
  */
 export async function listTaskEntries(
 	viewer: Viewer,
 	taskIds: string[],
 	take: number,
+	since: Date | null = null,
 ): Promise<Result<AuditEntryRow[], ApiError>> {
-	const rows = await wrapDb(() =>
-		db.auditEntry.findMany({
-			where: {...visibleTo(viewer), taskId: {in: taskIds}},
-			orderBy: {createdAt: 'desc'},
+	if (taskIds.length === 0) {
+		return wrapDb(async () => []);
+	}
+	const where = {
+		...visibleTo(viewer),
+		taskId: {in: taskIds},
+		...(since === null ? {} : {createdAt: {gte: since}}),
+	};
+	return wrapDb(async () => {
+		const counts = await db.auditEntry.groupBy({by: ['taskId'], where, _count: {_all: true}});
+		const share = fairShare(
+			counts.map((row) => row._count._all),
 			take,
+		);
+		if (share === null) {
+			return db.auditEntry.findMany({where, orderBy: {createdAt: 'asc'}, select: entrySelect});
+		}
+		const newest = await db.$queryRaw<Array<{id: string}>>`
+			SELECT "id" FROM (
+				SELECT "id", ROW_NUMBER() OVER (PARTITION BY "taskId" ORDER BY "createdAt" DESC, "id" DESC) AS "rank"
+				FROM "AuditEntry"
+				WHERE "orgId" = ${viewer.orgId}
+					AND ("ownerUserId" IS NULL OR "ownerUserId" = ${viewer.userId})
+					AND "taskId" IN (${Prisma.join(taskIds)})
+					${since === null ? Prisma.empty : Prisma.sql`AND "createdAt" >= ${since}`}
+			) AS "ranked"
+			WHERE "rank" <= ${share}`;
+		return db.auditEntry.findMany({
+			where: {id: {in: newest.map((row) => row.id)}},
+			orderBy: {createdAt: 'asc'},
 			select: entrySelect,
-		}),
-	);
-	return rows.map((newestFirst) => newestFirst.toReversed());
+		});
+	});
+}
+
+/**
+ * How many requests each task keeps where tasks with `counts` requests share `take`: the most that
+ * fits, a task with fewer keeping all of its own, and at least one; null where every request fits.
+ */
+export function fairShare(counts: number[], take: number): number | null {
+	if (counts.reduce((total, count) => total + count, 0) <= take) {
+		return null;
+	}
+	const sorted = counts.toSorted((a, b) => a - b);
+	let left = take;
+	for (const [index, count] of sorted.entries()) {
+		const sharing = sorted.length - index;
+		if (count * sharing > left) {
+			return Math.max(Math.floor(left / sharing), 1);
+		}
+		left -= count;
+	}
+	return null;
 }

@@ -16,10 +16,10 @@ mock.module('../utils/user-org', () => ({requireViewer, requireOwner: requireVie
 mock.module('@proxy/db/audit', () => ({listAuditEntries, listTaskEntries}));
 
 const listAgentTasks = mock();
-const listAgentTasksSince = mock();
+const listAgentTasksBetween = mock();
 const listSubTasks = mock();
 
-mock.module('@proxy/db/task', () => ({listAgentTasks, listAgentTasksSince, listSubTasks}));
+mock.module('@proxy/db/task', () => ({listAgentTasks, listAgentTasksBetween, listSubTasks}));
 
 function makeRequest(query: Record<string, string>) {
 	return {user: {userId: 'user-1', email: 'test@example.com', name: 'Test User'}, query};
@@ -29,7 +29,8 @@ beforeEach(() => {
 	mock.clearAllMocks();
 	listAuditEntries.mockResolvedValue(Ok([]));
 	listAgentTasks.mockResolvedValue(Ok([]));
-	listAgentTasksSince.mockResolvedValue(Ok([]));
+	listAgentTasksBetween.mockResolvedValue(Ok([]));
+	listSubTasks.mockResolvedValue(Ok([]));
 	setSystemTime(new Date('2026-10-15T23:30:00Z'));
 });
 
@@ -66,18 +67,20 @@ describe('handleActivityTimelineRoute', () => {
 			error: null,
 			createdAt: new Date('2026-10-15T20:05:00Z'),
 		};
-		listAgentTasksSince.mockResolvedValue(Ok([task]));
+		listAgentTasksBetween.mockResolvedValue(Ok([task]));
 		listTaskEntries.mockResolvedValue(Ok([entry]));
 		const {handleActivityTimelineRoute} = await import('./route');
 		const result = await handleActivityTimelineRoute(makeRequest({from: '2026-10-14T23:30:00Z'}) as never);
 
 		const viewer = expect.objectContaining({orgId: 'org-1', userId: 'user-1'});
-		expect(listAgentTasksSince).toHaveBeenCalledWith(viewer, new Date('2026-10-14T23:30:00Z'), 200);
-		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['task-1'], 2000);
+		expect(listAgentTasksBetween).toHaveBeenCalledWith(viewer, new Date('2026-10-14T23:30:00Z'), new Date('2026-10-15T23:30:00Z'), 200);
+		expect(listSubTasks).toHaveBeenCalledWith(viewer, ['task-1'], 1000);
+		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['task-1'], 2000, new Date('2026-10-14T23:30:00Z'));
 		const {createdAt, ...fields} = entry;
 		expect(result.unwrap()).toEqual({
 			now: '2026-10-15T23:30:00.000Z',
 			from: '2026-10-14T23:30:00.000Z',
+			to: '2026-10-15T23:30:00.000Z',
 			tasks: [
 				{
 					id: 'task-1',
@@ -101,8 +104,37 @@ describe('handleActivityTimelineRoute', () => {
 		await handleActivityTimelineRoute(makeRequest({from: '2020-01-01T00:00:00Z'}) as never);
 		const bad = await handleActivityTimelineRoute(makeRequest({from: 'yesterday'}) as never);
 
-		expect(listAgentTasksSince).toHaveBeenCalledWith(expect.objectContaining({orgId: 'org-1', userId: 'user-1'}), new Date('2026-09-14T23:30:00Z'), 200);
+		expect(listAgentTasksBetween).toHaveBeenCalledWith(expect.objectContaining({orgId: 'org-1', userId: 'user-1'}), new Date('2026-09-14T23:30:00Z'), new Date('2026-10-15T23:30:00Z'), 200);
 		expect(bad.unwrapErr().kind).toBe('parse_error');
+	});
+
+	test('reads a stretch of time ending before now, with the sub-tasks of its tasks, each once', async () => {
+		const task = (id: string, parentId: string | null, createdAt: string) => ({
+			id,
+			agentId: 'agent-1',
+			parentId,
+			title: 'Draft the pricing notes',
+			goal: 'Write up the pricing review',
+			via: 'mcp' as const,
+			createdAt: new Date(createdAt),
+			finishedAt: null,
+			outcome: null,
+		});
+		const notes = task('notes', null, '2026-10-01T10:00:00Z');
+		// Under a sub-task that was no longer under way, so read on its own too.
+		const left = task('left', 'sub', '2026-10-01T10:20:00Z');
+		listAgentTasksBetween.mockResolvedValue(Ok([left, notes]));
+		listSubTasks.mockResolvedValue(Ok([task('sub', 'notes', '2026-10-01T10:10:00Z'), left]));
+		listTaskEntries.mockResolvedValue(Ok([]));
+		const {handleActivityTimelineRoute} = await import('./route');
+		const result = await handleActivityTimelineRoute(makeRequest({from: '2026-10-01T00:00:00Z', to: '2026-10-02T00:00:00Z'}) as never);
+
+		const viewer = expect.objectContaining({orgId: 'org-1', userId: 'user-1'});
+		expect(listAgentTasksBetween).toHaveBeenCalledWith(viewer, new Date('2026-10-01T00:00:00Z'), new Date('2026-10-02T00:00:00Z'), 200);
+		expect(listSubTasks).toHaveBeenCalledWith(viewer, ['left', 'notes'], 1000);
+		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['left', 'sub', 'notes'], 2000, new Date('2026-10-01T00:00:00Z'));
+		expect(result.unwrap().to).toBe('2026-10-02T00:00:00.000Z');
+		expect(result.unwrap().tasks.map((one) => one.id)).toEqual(['left', 'sub', 'notes']);
 	});
 });
 
@@ -266,7 +298,7 @@ describe('handleTaskRunRoute', () => {
 		const viewer = expect.objectContaining({orgId: 'org-1', userId: 'user-1'});
 		expect(listAgentTasks).toHaveBeenCalledTimes(1);
 		expect(listAgentTasks).toHaveBeenCalledWith(viewer, ['notes']);
-		expect(listSubTasks).toHaveBeenCalledWith(viewer, 'notes', 500);
+		expect(listSubTasks).toHaveBeenCalledWith(viewer, ['notes'], 500);
 		expect(listTaskEntries).toHaveBeenCalledWith(viewer, ['notes', 'sub', 'deeper'], 2000);
 		const run = result.unwrap();
 		expect(run).toMatchObject({now: '2026-10-15T23:30:00.000Z', task: 'notes', agentId: 'agent-1', parent: null});

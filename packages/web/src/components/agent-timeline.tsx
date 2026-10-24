@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useLocation, useSearchParams} from 'react-router';
 import {getActivityTimeline} from '@/client/agents-client';
 import type {ActivityTimeline as ActivityAnswer} from '@/client/schemas';
@@ -71,8 +71,9 @@ function cancelZoom(zooming: {current: number | null}) {
 // the choice reads Custom. Scrolling sideways, or with Shift, moves it back in time and forward again
 // up to now, where it follows now once more; Now brings it straight back. A bar of several short
 // tasks zooms the window in on them. The timeline is read
-// again every minute, always at least a day back. With no task in that much, there is nothing to
-// show, and it stays off the page.
+// again every minute, at least a day back, or the window's own stretch where it is scrolled back
+// further than that. With no task in the past day, there is nothing to show, and it stays off the
+// page.
 export function AgentTimeline({
 	initial,
 	agents,
@@ -95,22 +96,29 @@ export function AgentTimeline({
 	// Where the window ends, scrolled back in time; null while it ends at now.
 	const [end, setEnd] = useState<number | null>(() => windowFromParams(params).end);
 	const mounted = useRef(false);
-	// The window's length and end, for the wheel's listener, which is added once.
+	// The window's length and end, and the now it is drawn up to, for the wheel's listener, which is
+	// added once. The listener moves them itself, as several turns of the wheel may come before the
+	// page is drawn again.
 	const length = useRef(minutes);
 	const ending = useRef(end);
+	const latest = useRef(Date.parse(initial.now));
 	useEffect(() => {
 		length.current = minutes;
 		ending.current = end;
 	}, [minutes, end]);
+	useEffect(() => {
+		latest.current = Date.parse(answer.now);
+	}, [answer.now]);
 
 	useEffect(() => {
 		let gone = false;
 		const read = async () => {
-			const from = Math.min(
-				(end ?? Date.now()) - minutes * MINUTE_MS,
-				Date.now() - LOADED_MINUTES * MINUTE_MS,
+			const range = loadedRange(minutes, end, Date.now());
+			const result = await getActivityTimeline(
+				org,
+				new Date(range.from).toISOString(),
+				range.to === null ? undefined : new Date(range.to).toISOString(),
 			);
-			const result = await getActivityTimeline(org, new Date(from).toISOString());
 			if (gone || result.isErr()) {
 				return;
 			}
@@ -145,12 +153,20 @@ export function AgentTimeline({
 	// The wheel with Ctrl or Cmd held, which a pinch on a trackpad also sends, zooms rather than
 	// scrolls the page, and sideways, or with Shift, scrolls the timeline through time, as far as the
 	// pointer moved; listened to by hand, since React's wheel listener can't stop the scroll. Up and
-	// down, the page scrolls as ever. On the timeline whenever it is there, which it isn't while
-	// there is nothing to show.
+	// down, the page scrolls as ever, and a zoom under way goes on. On the timeline whenever it is
+	// there, which it isn't while there is nothing to show. Now is the timeline's, as it was last
+	// read, so the window moves where it is drawn.
 	const listenForZoom = useCallback((element: HTMLDivElement) => {
-		const onWheel = (event: WheelEvent) => {
+		const move = (nextMinutes: number, nextEnd: number | null) => {
 			cancelZoom(zooming);
 			setAhead(NO_WINDOWS);
+			length.current = nextMinutes;
+			ending.current = nextEnd;
+			setMinutes(nextMinutes);
+			setEnd(nextEnd);
+		};
+		const onWheel = (event: WheelEvent) => {
+			const now = latest.current;
 			if (event.ctrlKey || event.metaKey) {
 				event.preventDefault();
 				// The moment under the pointer stays where it is, the window growing or shrinking
@@ -165,12 +181,13 @@ export function AgentTimeline({
 					),
 					1,
 				);
-				const now = Date.now();
 				const endAt = ending.current ?? now;
 				const under = endAt - (1 - fraction) * current * MINUTE_MS;
 				const nextEnd = under + (1 - fraction) * next * MINUTE_MS;
-				setMinutes(next);
-				setEnd(nextEnd >= now ? null : Math.max(nextEnd, now - (MAX_MINUTES - next) * MINUTE_MS));
+				move(
+					next,
+					nextEnd >= now ? null : Math.max(nextEnd, now - (MAX_MINUTES - next) * MINUTE_MS),
+				);
 				return;
 			}
 			const sideways = event.shiftKey ? event.deltaY : event.deltaX;
@@ -178,15 +195,11 @@ export function AgentTimeline({
 				return;
 			}
 			event.preventDefault();
-			const msPerPx = (length.current * MINUTE_MS) / Math.max(element.clientWidth - LABELS_PX, 100);
-			setEnd((current) => {
-				const now = Date.now();
-				const next = (current ?? now) + sideways * msPerPx;
-				if (next >= now) {
-					return null;
-				}
-				return Math.max(next, now - (MAX_MINUTES - length.current) * MINUTE_MS);
-			});
+			// A zoom stopped part of the way is whole minutes again.
+			const current = zooming.current === null ? length.current : Math.round(length.current);
+			const msPerPx = (current * MINUTE_MS) / Math.max(element.clientWidth - LABELS_PX, 100);
+			const next = (ending.current ?? now) + sideways * msPerPx;
+			move(current, next >= now ? null : Math.max(next, now - (MAX_MINUTES - current) * MINUTE_MS));
 		};
 		element.addEventListener('wheel', onWheel, {passive: false});
 		return () => element.removeEventListener('wheel', onWheel);
@@ -200,7 +213,7 @@ export function AgentTimeline({
 	// of them at once, moving with the zoom rather than as each comes. At once for those who would
 	// rather not see motion.
 	const zoomTo = (from: number, to: number) => {
-		const now = Date.now();
+		const now = latest.current;
 		const least = MIN_MINUTES * MINUTE_MS;
 		const most = MAX_MINUTES * MINUTE_MS;
 		const padded = Math.min(Math.max(Math.max(to - from, least) * 1.25, least), most);
@@ -254,8 +267,8 @@ export function AgentTimeline({
 			const next = new URLSearchParams(location.search);
 			next.delete('window');
 			next.delete('end');
-			if (minutes !== DEFAULT_MINUTES) {
-				next.set('window', String(minutes));
+			if (Math.round(minutes) !== DEFAULT_MINUTES) {
+				next.set('window', String(Math.round(minutes)));
 			}
 			if (end !== null) {
 				next.set('end', String(Math.round(end)));
@@ -276,8 +289,26 @@ export function AgentTimeline({
 	// they do, and only says so once the window has rested a second.
 	const resting = useRested(`${minutes}:${end ?? ''}`);
 
+	// The requests made for each task, for when it ended.
+	const ofTask = useMemo(() => {
+		const own = new Map<string, AuditEntry[]>();
+		for (const entry of answer.entries) {
+			if (entry.taskId === null) {
+				continue;
+			}
+			const known = own.get(entry.taskId);
+			if (known) {
+				known.push(entry);
+				continue;
+			}
+			own.set(entry.taskId, [entry]);
+		}
+		return own;
+	}, [answer.entries]);
+
 	// Nothing in the past day, or further back where the window reaches: nothing to show at all.
-	if (answer.tasks.length === 0) {
+	// Scrolled back further than a day, what was read is the window's own stretch, which may be empty.
+	if (answer.tasks.length === 0 && answer.to === answer.now) {
 		return null;
 	}
 
@@ -289,8 +320,9 @@ export function AgentTimeline({
 		if (new Date(task.startedAt).getTime() > window.to.getTime()) {
 			return false;
 		}
-		const own = answer.entries.filter((entry) => entry.taskId === task.id);
-		return (endedAt(task, own, now) ?? now).getTime() >= window.from.getTime();
+		return (
+			(endedAt(task, ofTask.get(task.id) ?? [], now) ?? now).getTime() >= window.from.getTime()
+		);
 	});
 	const preset = presetOf(wholeMinutes);
 
@@ -392,6 +424,22 @@ function useRested(key: string): boolean {
 		return () => clearTimeout(timer);
 	}, [key]);
 	return rested;
+}
+
+// What is read for a window, in milliseconds since the epoch: from its start, and at least a day
+// back, up to now; or, scrolled back further than a day, its own stretch alone (`to` null for now).
+function loadedRange(
+	minutes: number,
+	end: number | null,
+	now: number,
+): {from: number; to: number | null} {
+	const dayAgo = now - LOADED_MINUTES * MINUTE_MS;
+	const windowEnd = end ?? now;
+	const windowFrom = windowEnd - minutes * MINUTE_MS;
+	if (windowEnd < dayAgo) {
+		return {from: windowFrom, to: windowEnd};
+	}
+	return {from: Math.min(windowFrom, dayAgo), to: null};
 }
 
 // The window as the address has it: its length in minutes and where it ends, where either is

@@ -126,11 +126,14 @@ export function getTaskRun(org: string, taskId: string) {
 	);
 }
 
-/** The home page's timeline: every task under way at some point since `from`, an ISO instant, with every request made for them. */
-export function getActivityTimeline(org: string, from: string) {
+/**
+ * The home page's timeline: every task under way at some point between `from` and `to`, ISO
+ * instants, or since `from` without `to`, with its sub-tasks and the requests made for them.
+ */
+export function getActivityTimeline(org: string, from: string, to?: string) {
 	return apiRequest(
 		'GET',
-		`${orgApi(org)}/activity/timeline?${new URLSearchParams({from})}`,
+		`${orgApi(org)}/activity/timeline?${new URLSearchParams({from, ...(to === undefined ? {} : {to})})}`,
 		activityTimelineSchema,
 	);
 }

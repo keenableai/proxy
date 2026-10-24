@@ -99,15 +99,17 @@ export const activityTaskSchema = z.object({
 	outcome: z.string().nullable(),
 });
 
-// The home page's timeline: every task under way at some point since `from`, and every request
-// made for them.
+// The home page's timeline: every task under way at some point between `from` and `to`, with its
+// sub-tasks, and the requests made for them.
 export const activityTimelineSchema = z.object({
 	// When the answer was made: the right edge of the timeline.
 	now: z.string(),
 	from: z.string(),
+	// `now`, where the stretch read runs up to it.
+	to: z.string(),
 	// Newest first.
 	tasks: z.array(activityTaskSchema),
-	// In the order they were made.
+	// Those since `from`, in the order they were made.
 	entries: z.array(auditEntrySchema),
 });
 

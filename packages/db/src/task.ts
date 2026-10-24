@@ -162,29 +162,40 @@ export async function listOpenAgentTasks(
 }
 
 /**
- * The tasks the viewer sees, shared agents' and their own agents', under way at some point since
- * `from`: started before now and not finished before `from`, nor abandoned before it, a day after
- * it started; the newest `take` of them, newest first.
+ * The tasks the viewer sees, shared agents' and their own agents', under way at some point between
+ * `from` and `to`: started by `to` and not finished before `from`, nor abandoned before it, a day
+ * after it started. Of those, the newest `take` that are tasks of their own: started on their own,
+ * or handed on from a task not under way then, as one abandoned may have left a sub-task going;
+ * newest first. The rest are sub-tasks of these (listSubTasks).
  */
-export async function listAgentTasksSince(
+export async function listAgentTasksBetween(
 	viewer: Viewer,
 	from: Date,
+	to: Date,
 	take: number,
 ): Promise<Result<AgentTaskRow[], ApiError>> {
-	return wrapDb(() =>
-		db.agentTask.findMany({
-			where: {
-				AND: [visibleTo(viewer)],
-				OR: [
-					{finishedAt: {gte: from}},
-					{finishedAt: null, createdAt: {gte: new Date(from.getTime() - TASK_ABANDONED_AFTER_MS)}},
-				],
-			},
+	const startedSince = new Date(from.getTime() - TASK_ABANDONED_AFTER_MS);
+	return wrapDb(async () => {
+		const tops = await db.$queryRaw<Array<{id: string}>>`
+			SELECT "task"."id" FROM "AgentTask" AS "task"
+			WHERE "task"."orgId" = ${viewer.orgId}
+				AND ("task"."ownerUserId" IS NULL OR "task"."ownerUserId" = ${viewer.userId})
+				AND "task"."createdAt" <= ${to}
+				AND ("task"."finishedAt" >= ${from} OR ("task"."finishedAt" IS NULL AND "task"."createdAt" >= ${startedSince}))
+				AND NOT EXISTS (
+					SELECT 1 FROM "AgentTask" AS "parent"
+					WHERE "parent"."id" = "task"."parentId"
+						AND "parent"."createdAt" <= ${to}
+						AND ("parent"."finishedAt" >= ${from} OR ("parent"."finishedAt" IS NULL AND "parent"."createdAt" >= ${startedSince}))
+				)
+			ORDER BY "task"."createdAt" DESC
+			LIMIT ${take}`;
+		return db.agentTask.findMany({
+			where: {id: {in: tops.map((task) => task.id)}},
 			select: taskSelect,
 			orderBy: {createdAt: 'desc'},
-			take,
-		}),
-	);
+		});
+	});
 }
 
 /** The tasks the viewer sees among `ids`, for naming what the activity log's entries were for. */
@@ -204,18 +215,18 @@ export async function listAgentTasks(
 }
 
 /**
- * The sub-tasks of the task `taskId`, at every depth, that the viewer sees, in the order started:
+ * The sub-tasks of the tasks `taskIds`, at every depth, that the viewer sees, in the order started:
  * the first `take` of them, level by level, so a task with more under it than that shows what it
  * handed on itself before what those handed on in turn.
  */
 export async function listSubTasks(
 	viewer: Viewer,
-	taskId: string,
+	taskIds: string[],
 	take: number,
 ): Promise<Result<AgentTaskRow[], ApiError>> {
 	return wrapDb(async () => {
 		const found: AgentTaskRow[] = [];
-		let parentIds = [taskId];
+		let parentIds = taskIds;
 		while (parentIds.length > 0 && found.length < take) {
 			const level: AgentTaskRow[] = await db.agentTask.findMany({
 				where: {...visibleTo(viewer), parentId: {in: parentIds}},

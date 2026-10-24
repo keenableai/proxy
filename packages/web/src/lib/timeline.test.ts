@@ -113,5 +113,6 @@ describe('requestSummary', () => {
 		];
 		expect(requestSummary(requests)).toEqual(['3 requests', '1 blocked', '1 failed']);
 		expect(requestSummary([])).toEqual([]);
+		expect(requestSummary([{start: 0, end: 1, entry: entry({})}])).toEqual(['1 request']);
 	});
 });

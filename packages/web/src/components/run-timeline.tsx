@@ -1,5 +1,5 @@
 import {ChevronDownIcon, ChevronRightIcon, CornerDownRightIcon} from 'lucide-react';
-import {Fragment, useId, useState} from 'react';
+import {Fragment, useId, useMemo, useState} from 'react';
 import {Link, useLocation} from 'react-router';
 import {
 	AxisLabels,
@@ -69,7 +69,11 @@ export function RunTimeline({tasks, entries, now, connections, onOpenEntry}: Pro
 	const [active, setActive] = useState<string | null>(null);
 	const [measure, width] = useChartWidth();
 	const hatch = useId();
-	const timeline = buildRunTimeline(tasks, entries, new Date(now), width, {expanded});
+	// Laid out again only where what it shows changes, not as the pointer moves over it.
+	const timeline = useMemo(
+		() => buildRunTimeline(tasks, entries, new Date(now), width, {expanded}),
+		[tasks, entries, now, width, expanded],
+	);
 	const titleOf = (taskId: string | null) =>
 		tasks.find((candidate) => candidate.id === taskId)?.title ?? null;
 	const toggle = (row: RunRow) =>
