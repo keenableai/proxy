@@ -1,8 +1,6 @@
 // `bun run seed`: fills the local database with a demo workspace, signed in as demo@proxy.local,
 // for looking at the app with data in it. Run it while `bun run dev` is up. Running it again
 // deletes the demo user and their organization first, then seeds them again.
-import {createCipheriv, createHash, randomBytes} from 'node:crypto';
-
 import {
 	effectiveActions,
 	EMAIL_PROVIDERS,
@@ -15,6 +13,7 @@ import {
 } from '@proxy/integrations';
 
 import {db} from '../src';
+import {encrypt, signInLink, wipeUser} from './local-seed';
 
 // Whose workspace it is: the demo person's, or with SEED_EMAIL another's, such as the dev user's
 // (`dev@dev.proxy.local`), whom the login page signs in as in development.
@@ -23,35 +22,10 @@ const WORKSPACE_SLUG = `${DEMO_EMAIL.split('@')[0]}-workspace`;
 // Agent usernames are unique across workspaces, so another person's get their name on the end.
 const USERNAME_SUFFIX = DEMO_EMAIL === 'demo@proxy.local' ? '' : `-${DEMO_EMAIL.split('@')[0]}`;
 const ORG_NAME = "Demo's Workspace";
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const now = Date.now();
-
-// It deletes what it finds under the demo email, so never against anything but the local database.
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl || !URL.canParse(databaseUrl) || !LOCAL_HOSTS.has(new URL(databaseUrl).hostname)) {
-	console.error('[seed] DATABASE_URL is not the local database; see .env.example.');
-	process.exit(1);
-}
-
-const encryptionKey = process.env.ENCRYPTION_KEY;
-const authSecret = process.env.AUTH_SECRET;
-if (!encryptionKey || !authSecret) {
-	console.error('[seed] ENCRYPTION_KEY and AUTH_SECRET are needed; see .env.example.');
-	process.exit(1);
-}
-const key = Buffer.from(encryptionKey, 'base64');
-
-// The api's format (`packages/api/src/utils/secret-crypto.ts`), so it can read what is seeded.
-function encrypt(plaintext: string): string {
-	const iv = randomBytes(12);
-	const cipher = createCipheriv('aes-256-gcm', key, iv);
-	const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-	const parts = [iv, cipher.getAuthTag(), ciphertext].map((part) => part.toString('base64url'));
-	return ['v1', ...parts].join('.');
-}
 
 // Deterministic, so the activity log comes out the same on every run.
 let randomState = 42;
@@ -70,19 +44,7 @@ function daysAgo(days: number): Date {
 
 // ---- Wipe -----------------------------------------------------------------------------------
 
-const existing = await db.user.findUnique({where: {email: DEMO_EMAIL}, select: {id: true}});
-if (existing) {
-	// The organizations the demo user owns: one they were invited into is someone else's.
-	const orgs = await db.organization.findMany({
-		where: {ownerUserId: existing.id},
-		select: {id: true},
-	});
-	const orgIds = orgs.map((org) => org.id);
-	await db.auditEntry.deleteMany({where: {orgId: {in: orgIds}}});
-	await db.agentTask.deleteMany({where: {orgId: {in: orgIds}}});
-	await db.organization.deleteMany({where: {id: {in: orgIds}}});
-	await db.user.delete({where: {id: existing.id}});
-}
+await wipeUser(DEMO_EMAIL);
 
 // ---- User and organization ------------------------------------------------------------------
 
@@ -1009,27 +971,12 @@ for (const agent of agents) {
 
 // ---- A sign-in link -------------------------------------------------------------------------
 
-// A magic link as the api makes one (`packages/api/src/auth/email.ts`): only the token's hash is
-// stored, and it works once.
-const token = randomBytes(32).toString('hex');
-await db.verificationToken.create({
-	data: {
-		identifier: DEMO_EMAIL,
-		token: createHash('sha256').update(`${token}${authSecret}`).digest('hex'),
-		expires: new Date(now + DAY),
-	},
-});
-const apiUrl = process.env.VITE_PROXY_API_URL ?? 'http://localhost:4000';
-const query = new URLSearchParams({
-	token,
-	email: DEMO_EMAIL,
-	callbackUrl: `/${WORKSPACE_SLUG}/agents`,
-});
+const link = await signInLink(DEMO_EMAIL, `/${WORKSPACE_SLUG}/agents`);
 
 console.log(
 	`[seed] ${connections.length} connections, ${agents.length} agents, ${taskCount} tasks and ${entryCount} activity entries for ${DEMO_EMAIL}.`,
 );
-console.log(`[seed] Sign in, once, within 24 hours: ${apiUrl}/auth/email/verify?${query}`);
+console.log(`[seed] Sign in, once, within 24 hours: ${link}`);
 console.log(`[seed] Later, ask for a magic link for ${DEMO_EMAIL}; the api prints it.`);
 console.log(`[seed] Agents sign in at /agent/login with their username and "${AGENT_PASSWORD}".`);
 await db.$disconnect();
