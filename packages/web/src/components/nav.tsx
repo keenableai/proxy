@@ -1,6 +1,5 @@
 import {
 	BotIcon,
-	CircleUserIcon,
 	HomeIcon,
 	LibraryIcon,
 	LogOutIcon,
@@ -13,6 +12,7 @@ import {
 import {Link, useLocation} from 'react-router';
 import {signOut} from '@/client/auth-client';
 import {OrgSwitcher} from '@/components/org-switcher';
+import {PersonAvatar} from '@/components/person-avatar';
 import {ThemeMenu} from '@/components/theme-menu';
 import {
 	Sidebar,
@@ -93,7 +93,9 @@ export function AppSidebar() {
 							tooltip="Account"
 							render={<Link to="/account" onClick={() => setOpenMobile(false)} />}
 						>
-							<CircleUserIcon />
+							<span className="flex size-4 shrink-0 items-center justify-center">
+								{human ? <PersonAvatar person={human.user} className="size-6" /> : null}
+							</span>
 							<span>Account</span>
 						</SidebarMenuButton>
 					</SidebarMenuItem>
