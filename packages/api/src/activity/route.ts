@@ -2,7 +2,7 @@ import {Err, type Result} from 'ts-results-es';
 import {z} from 'zod';
 
 import {ApiErr, type ApiError, Do, parseSchema} from '@proxy/utils';
-import {type AuditEntryRow, listAuditEntries, listLastTaskEntries, listTaskEntries} from '@proxy/db/audit';
+import {type AuditEntryRow, listAuditEntries, listTaskEntries} from '@proxy/db/audit';
 import {listMemberNames} from '@proxy/db/organization';
 import type {Look} from '@proxy/utils/harness';
 import {listPersonasById} from '@proxy/db/harness';
@@ -58,13 +58,13 @@ export type ActivityTaskResponse = {
 	goal: string;
 	via: 'web' | 'mcp' | 'harness';
 	startedAt: string;
-	// Null while the agent hasn't called it finished, abandoned (@proxy/utils/tasks) or not.
+	// Null while the agent hasn't called it finished, left open (@proxy/utils/tasks) or not.
 	finishedAt: string | null;
 	// What was done or found, as the agent said when it finished; null where it said nothing.
 	outcome: string | null;
-	// When it, or the last of its sub-tasks at any depth, was started: one never finished is taken
-	// as abandoned a day after (@proxy/utils/tasks).
-	lastStartedAt: string;
+	// When it, or one of its sub-tasks at any depth, was last started or had a request made for it:
+	// one never finished is taken as left open 20 minutes after (@proxy/utils/tasks).
+	lastActiveAt: string;
 };
 
 // The tasks as the web app reads them, each with the persona it was run as, where it was.
@@ -72,14 +72,14 @@ function toActivityTasks(viewer: Viewer, rows: AgentTaskRow[]): Promise<Result<A
 	return Do(async ($) => {
 		const personaIds = new Set(rows.flatMap((row) => (row.personaId === null ? [] : [row.personaId])));
 		const personas = $(await listPersonasById(viewer.orgId, [...personaIds]));
-		return rows.map(({createdAt, finishedAt, lastStartedAt, personaId, ...task}) => {
+		return rows.map(({createdAt, finishedAt, lastActiveAt, personaId, ...task}) => {
 			const persona = personas.find((candidate) => candidate.id === personaId);
 			return {
 				...task,
 				persona: persona ? {id: persona.id, name: persona.name, look: persona.look, color: persona.color} : null,
 				startedAt: createdAt.toISOString(),
 				finishedAt: finishedAt?.toISOString() ?? null,
-				lastStartedAt: lastStartedAt.toISOString(),
+				lastActiveAt: lastActiveAt.toISOString(),
 			};
 		});
 	});
@@ -197,8 +197,7 @@ export type ActivityTimelineResponse = {
 	to: string;
 	// Every task under way at some point between `from` and `to`, with its sub-tasks, newest first.
 	tasks: ActivityTaskResponse[];
-	// The requests made for them between `from` and `to`, in the order they were made; and, where
-	// `to` is before now, each task's last made after it.
+	// The requests made for them between `from` and `to`, in the order they were made.
 	entries: AuditEntryResponse[];
 };
 
@@ -227,15 +226,12 @@ export function handleActivityTimelineRoute(request: AuthenticatedRequest): Prom
 		const ids = tasks.map((task) => task.id);
 		// Only the stretch read shares out the most requests, so none goes to what came after it.
 		const rows = $(await listTaskEntries(viewer, ids, MAX_TIMELINE_ENTRIES, {from, to}));
-		// Read back from before now, a task given up on may have had requests made after the stretch:
-		// the last of them says when it ended (@/lib/timeline-window's endsOf in the web app).
-		const later = to < now ? $(await listLastTaskEntries(viewer, ids, to)) : [];
 		return {
 			now: now.toISOString(),
 			from: from.toISOString(),
 			to: to.toISOString(),
 			tasks: $(await toActivityTasks(viewer, tasks)),
-			entries: $(await toEntries(viewer, [...rows, ...later])),
+			entries: $(await toEntries(viewer, rows)),
 		};
 	});
 }

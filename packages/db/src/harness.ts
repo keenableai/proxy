@@ -18,7 +18,6 @@ import {
 	readyForInference,
 	type ToolCall,
 } from '@proxy/utils/harness';
-import {TASK_ABANDONED_AFTER_MS} from '@proxy/utils/tasks';
 
 import {db} from '.';
 import {signedInAgentSelect, type SignedInAgent, toSignedInAgent} from './signed-in-agent';
@@ -464,7 +463,7 @@ export async function listJobEvents(threadId: string): Promise<Result<JobEventRo
 	);
 }
 
-/** A new task for a sub-agent's calls, once the one before was abandoned. */
+/** A new task for a sub-agent's calls, once the one before was finished while it was at work. */
 export async function setThreadTask(
 	threadId: string,
 	taskId: string,
@@ -586,7 +585,7 @@ async function answerCall(
 }
 
 // Ends a sub-agent's work with its report: its thread is done, its task finished with the report
-// as the outcome (unless abandoned meanwhile, as a task is a day after its last start), and the
+// as the outcome, taken up again where it was left open meanwhile (@proxy/utils/tasks), and the
 // report answers the call that started it, in the thread it was started from, from the sub-agent's
 // job that ended with it. With the sub-agent's thread locked; its parent's is locked here, after.
 async function endSubAgent(
@@ -606,12 +605,8 @@ async function endSubAgent(
 	await tx.agentThread.update({where: {id: thread.id}, data: {finishedAt: now}});
 	if (thread.taskId !== null) {
 		await tx.agentTask.updateMany({
-			where: {
-				id: thread.taskId,
-				finishedAt: null,
-				lastStartedAt: {gt: new Date(now.getTime() - TASK_ABANDONED_AFTER_MS)},
-			},
-			data: {finishedAt: now, outcome: cut(report.text, MAX_TASK_TEXT)},
+			where: {id: thread.taskId, finishedAt: null},
+			data: {finishedAt: now, lastActiveAt: now, outcome: cut(report.text, MAX_TASK_TEXT)},
 		});
 	}
 	const parent = await lockThread(tx, thread.parentThreadId);
@@ -1001,7 +996,7 @@ export async function startSubAgent(
 					goal: cut(call.brief, MAX_TASK_TEXT),
 					via: 'harness',
 					createdAt: now,
-					lastStartedAt: now,
+					lastActiveAt: now,
 				},
 				select: {id: true},
 			});
