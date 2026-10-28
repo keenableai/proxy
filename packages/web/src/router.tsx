@@ -272,7 +272,7 @@ export const router = createBrowserRouter([
 			// The built-in agents, behind the `harness` experiment: the api refuses it otherwise.
 			{path: '/:org/chat', loader: chatIndexLoader, element: <ChatPage />},
 			{path: '/:org/chat/:id', loader: chatLoader, element: <ChatPage />},
-			// The inspector of the built-in agent, behind the `harness_debug` experiment too, on a
+			// The inspector of the built-in agent, behind the `debug` experiment too, on a
 			// page of its own, reached by its address alone.
 			{path: '/:org/inspect', loader: inspectIndexLoader, element: <InspectPage />},
 			{path: '/:org/inspect/:id', loader: inspectLoader, element: <InspectPage />},

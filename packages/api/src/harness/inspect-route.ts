@@ -27,7 +27,7 @@ import {type PersonaResponse, toPersona} from './persona-response';
 import {toolsFor} from './tool-surface';
 
 /**
- * The inspector's routes, for whoever works on the built-in agent, behind the `harness_debug`
+ * The inspector's routes, for whoever works on the built-in agent, behind the `debug`
  * experiment beside `harness`: the viewer's conversation with a persona as the harness has it,
  * every thread of it with its whole log, its jobs and what happened to each, and, for any answer
  * of the model, the request it was sent, rebuilt from the log with the functions the harness runs
@@ -164,7 +164,7 @@ function stateOf(entries: EntryRow[]): ThreadState {
 function requireInspector(request: AuthenticatedRequest): Promise<Result<OrgViewer, ApiError>> {
 	return Do(async ($) => {
 		const viewer = $(await requireViewer(request));
-		if (!hasExperiment(viewer, 'harness') || !hasExperiment(viewer, 'harness_debug')) {
+		if (!hasExperiment(viewer, 'harness') || !hasExperiment(viewer, 'debug')) {
 			return $(Err(ApiErr.forbidden()));
 		}
 		return viewer;

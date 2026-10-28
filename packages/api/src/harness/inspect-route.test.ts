@@ -39,7 +39,7 @@ mock.module('@proxy/db/harness', () => ({
 	requeueJob: mock(),
 }));
 
-const viewer = {orgId: 'org-1', userId: 'user-1', slug: 'acme', name: 'Acme', role: 'member' as 'member' | 'owner', onboarded: true, experiments: ['harness', 'harness_debug']};
+const viewer = {orgId: 'org-1', userId: 'user-1', slug: 'acme', name: 'Acme', role: 'member' as 'member' | 'owner', onboarded: true, experiments: ['harness', 'debug']};
 const requireViewer = mock(async () => Ok(viewer));
 mock.module('../utils/user-org', () => ({requireViewer}));
 
