@@ -3,16 +3,17 @@ import {Err, Ok, type Result} from 'ts-results-es';
 import {ApiErr, type ApiError, Do} from '@proxy/utils';
 
 import {EXA, parseExaPage} from '../connections/exa/exa-mcp';
+import {formatKeenableResults, KEENABLE, parseKeenablePage} from '../connections/keenable/keenable-mcp';
 import type {McpServer} from '../connections/mcp/mcp-oauth';
 import {callMcpToolFor} from '../connections/mcp/mcp-session';
 import {formatParallelResults, parseParallelPage, PARALLEL} from '../connections/parallel/parallel-mcp';
 import {onlyRun, type Connector, type DataRecord} from './connector';
 
 /**
- * The web, through a search engine made for agents, Exa or Parallel, fetched live from its MCP
- * server with the connection's tokens. Searches and pages are only run, never listed, opened or
- * kept: a search answers with the provider's results, written out the same way for both, a page
- * with its title and text, the first MAX_PAGE_CHARACTERS of it.
+ * The web, through a search engine made for agents, Exa, Parallel or Keenable, fetched live from
+ * its MCP server with the connection's tokens. Searches and pages are only run, never listed,
+ * opened or kept: a search answers with the provider's results, written out the same way for each,
+ * a page with its title and text, the first MAX_PAGE_CHARACTERS of it.
  */
 
 const MAX_PAGE_CHARACTERS = 100_000;
@@ -40,6 +41,13 @@ const PARALLEL_WEB: WebProvider = {
 	server: PARALLEL,
 	search: (query) => ({tool: 'web_search', args: {objective: query, search_queries: [query]}, answer: formatParallelResults}),
 	read: (url) => ({tool: 'web_fetch', args: {urls: [url], full_content: true}, answer: (text) => parseParallelPage(text, url)}),
+};
+
+// Keenable takes the query as it is, stops reading a page where it is cut, and answers both as JSON.
+const KEENABLE_WEB: WebProvider = {
+	server: KEENABLE,
+	search: (query) => ({tool: 'search_web_pages', args: {query, output_format: 'json'}, answer: formatKeenableResults}),
+	read: (url) => ({tool: 'fetch_page_content', args: {url, max_chars: MAX_PAGE_CHARACTERS, output_format: 'json'}, answer: parseKeenablePage}),
 };
 
 // An address a provider can read: `http` or `https`.
@@ -80,3 +88,5 @@ function webConnector(provider: WebProvider): Connector {
 export const exaConnector = webConnector(EXA_WEB);
 
 export const parallelConnector = webConnector(PARALLEL_WEB);
+
+export const keenableConnector = webConnector(KEENABLE_WEB);

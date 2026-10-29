@@ -75,6 +75,7 @@ mock.module('../utils/secret-crypto', () => ({
 const {movedCredential, movedPermissions, movedRun, takeOverCustomConnections} = await import('./take-over-custom');
 const {CLOUDFLARE_MCP} = await import('./cloudflare/route');
 const {EXA_MCP} = await import('./exa/route');
+const {KEENABLE_MCP} = await import('./keenable/route');
 const {LINEAR_MCP} = await import('./linear/route');
 const {PARALLEL_MCP} = await import('./parallel/route');
 
@@ -203,6 +204,16 @@ describe('movedCredential', () => {
 	test('a server reached with nothing at all stays custom, rather than stop working', () => {
 		expect(movedCredential(PARALLEL_MCP, {auth: 'none', url: 'https://search.parallel.ai/mcp'})).toEqual({kind: 'stays'});
 		expect(movedCredential(EXA_MCP, {auth: 'none', url: 'https://mcp.exa.ai/mcp'})).toEqual({kind: 'stays'});
+	});
+
+	test("Keenable's keyless server: a key typed in for it becomes the integration's API key, and reached with nothing it stays custom", () => {
+		expect(movedCredential(KEENABLE_MCP, {auth: 'token', url: 'https://api.keenable.ai/mcp', token: 'keen_a1_1234'})).toEqual({kind: 'moved', credential: {auth: 'key', key: 'keen_a1_1234'}});
+		expect(movedCredential(KEENABLE_MCP, {auth: 'none', url: 'https://api.keenable.ai/mcp'})).toEqual({kind: 'stays'});
+		expect(movedRun(KEENABLE_MCP, {id: 'e-1', action: 'fetch_page_content', query: JSON.stringify({url: 'https://example.com'})})).toMatchObject({
+			collectionId: 'pages',
+			action: 'read',
+			recordTitle: 'https://example.com',
+		});
 	});
 
 	test('a sign-in through another authorization server has to be signed in to again', () => {

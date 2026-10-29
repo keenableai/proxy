@@ -3,7 +3,7 @@ import {Ok} from 'ts-results-es';
 
 import {findCollection, findIntegration, type Collection} from '@proxy/integrations';
 
-// The servers' tools by name, answering as Exa's and Parallel's do.
+// The servers' tools by name, answering as Exa's, Parallel's and Keenable's do.
 type Call = {server: string; name: string; args: Record<string, unknown>};
 const tools = {calls: [] as Call[], answer: (_call: Call): string => ''};
 
@@ -14,7 +14,9 @@ mock.module('../connections/mcp/mcp-session', () => ({
 	},
 }));
 
-const {exaConnector, parallelConnector} = await import('./web-connector');
+const {exaConnector, keenableConnector, parallelConnector} = await import('./web-connector');
+
+const CONNECTORS = {exa: exaConnector, parallel: parallelConnector, keenable: keenableConnector};
 
 function collection(integrationId: string, id: string): Collection {
 	const integration = findIntegration(integrationId);
@@ -25,7 +27,7 @@ function collection(integrationId: string, id: string): Collection {
 	return found;
 }
 
-function run(integrationId: 'exa' | 'parallel', command: 'run' | 'read', values: Record<string, string>) {
+function run(integrationId: keyof typeof CONNECTORS, command: 'run' | 'read', values: Record<string, string>) {
 	const target = {
 		connection: {
 			id: `${integrationId}-1`,
@@ -42,7 +44,7 @@ function run(integrationId: 'exa' | 'parallel', command: 'run' | 'read', values:
 		},
 		collection: collection(integrationId, command === 'run' ? 'searches' : 'pages'),
 	};
-	const runner = (integrationId === 'exa' ? exaConnector : parallelConnector).newCommands?.[command];
+	const runner = CONNECTORS[integrationId].newCommands?.[command];
 	if (!runner) {
 		throw new Error(`No ${command} for ${integrationId}`);
 	}
@@ -63,6 +65,15 @@ beforeEach(() => {
 		if (name === 'web_search') {
 			return JSON.stringify({results: [{url: 'https://bun.sh/docs/test/mocks', title: 'Mocks | Bun Docs', publish_date: null, excerpts: ['Mocking replaces a dependency.']}]});
 		}
+		if (name === 'search_web_pages') {
+			return JSON.stringify({
+				query: 'bun module mocks',
+				results: [{url: 'https://bun.sh/docs/test/mocks', title: 'Mocks | Bun Docs', description: '', snippet: 'Mocking replaces a dependency.\n', acquired_at: '2026-10-13T09:00:00Z'}],
+			});
+		}
+		if (name === 'fetch_page_content') {
+			return JSON.stringify({url: 'https://bun.sh/docs/test/mocks', title: 'Mocks | Bun Docs', content: 'Mocking replaces a dependency.', description: ''});
+		}
 		return JSON.stringify({results: [{url: 'https://bun.sh/docs/test/mocks', title: 'Mocks | Bun Docs', excerpts: [], full_content: 'x'.repeat(150_000)}], errors: []});
 	};
 });
@@ -80,6 +91,20 @@ describe('webConnector', () => {
 
 		expect(tools.calls).toEqual([{server: 'Parallel', name: 'web_search', args: {objective: 'bun module mocks', search_queries: ['bun module mocks']}}]);
 		expect(record?.values.results).toBe(EXA_RESULTS);
+	});
+
+	test('searches Keenable with the query, asking for JSON, its results written as Exa writes them', async () => {
+		const record = (await run('keenable', 'run', {query: 'bun module mocks'})).unwrap();
+
+		expect(tools.calls).toEqual([{server: 'Keenable', name: 'search_web_pages', args: {query: 'bun module mocks', output_format: 'json'}}]);
+		expect(record?.values.results).toBe(EXA_RESULTS);
+	});
+
+	test('reads a page with Keenable, as much of it as is kept', async () => {
+		const record = (await run('keenable', 'read', {url: 'https://bun.sh/docs/test/mocks'})).unwrap();
+
+		expect(tools.calls).toEqual([{server: 'Keenable', name: 'fetch_page_content', args: {url: 'https://bun.sh/docs/test/mocks', max_chars: 100_000, output_format: 'json'}}]);
+		expect(record?.values).toEqual({url: 'https://bun.sh/docs/test/mocks', title: 'Mocks | Bun Docs', content: 'Mocking replaces a dependency.'});
 	});
 
 	test('reads a page with Exa, as much of it as is kept', async () => {

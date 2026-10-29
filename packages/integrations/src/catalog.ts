@@ -641,7 +641,7 @@ const cloudflare: Integration = {
 // the provider's results, each page's title, address and the passages that fit the query; a page as
 // its text. Nothing is listed or kept: searches and pages are only ever run.
 function webIntegration(
-	id: 'exa' | 'parallel',
+	id: 'exa' | 'parallel' | 'keenable',
 	name: string,
 	description: string,
 	keysUrl: string,
@@ -735,6 +735,13 @@ const parallel = webIntegration(
 	'Parallel',
 	'Search and read the web',
 	'https://platform.parallel.ai',
+);
+
+const keenable = webIntegration(
+	'keenable',
+	'Keenable',
+	'Search and read the web',
+	'https://app.keenable.ai/console',
 );
 
 // A SQL database, signed in to with a database user's name and password: PostgreSQL, or MySQL
@@ -1553,6 +1560,7 @@ export const INTEGRATIONS: Integration[] = [
 	cloudflare,
 	exa,
 	parallel,
+	keenable,
 	plaid,
 	postgres,
 	mysql,

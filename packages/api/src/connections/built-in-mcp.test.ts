@@ -71,6 +71,7 @@ describe('BUILT_IN_MCP', () => {
 	test('finds the integration by host, as an address writes it', () => {
 		expect(builtInForHost('mcp.linear.app')?.integrationId).toBe('linear');
 		expect(builtInForHost('Search.Parallel.ai')?.integrationId).toBe('parallel');
+		expect(builtInForHost('api.keenable.ai')?.integrationId).toBe('keenable');
 		expect(builtInForHost('mcp.example.com')).toBeUndefined();
 	});
 });
