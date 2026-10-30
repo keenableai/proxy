@@ -37,9 +37,19 @@ const loadConnection = mock();
 
 mock.module('../records/target', () => ({loadConnection}));
 
+// Every collection's connector is the one stand-in below.
+mock.module('../records/connectors', () => ({connectorFor: () => connector}));
+
 const callCustomTool = mock();
 
 mock.module('../connections/custom/custom-mcp', () => ({callCustomTool}));
+
+// Of the integrations' modules, Google's partial consent alone, read from its credential.
+const {unavailableGoogleConnectionActions} = await import('../connections/google/unavailable');
+
+mock.module('../connections/integrations', () => ({
+	apiIntegration: (id: string) => (id === 'google' ? {id, connectors: {}, unavailableActions: unavailableGoogleConnectionActions} : undefined),
+}));
 
 function integration(id: string): Integration {
 	const found = findIntegration(id);
@@ -135,7 +145,7 @@ const sendReply = mock();
 const connector = {list: mock(), get: mock(), create: mock(), update: mock(), remove: mock(), commands: {archive, send}, newCommands: {sendNew, read, send: sendReply}};
 
 function useConnection(connection: typeof vaultConnection | typeof emailConnection | typeof notionConnection | typeof googleConnection) {
-	loadConnection.mockResolvedValue(Ok({connection, integration: integration(connection.integrationId), connector}));
+	loadConnection.mockResolvedValue(Ok({connection, integration: integration(connection.integrationId)}));
 }
 
 beforeEach(() => {
@@ -639,7 +649,7 @@ describe('custom MCP servers', () => {
 	};
 
 	beforeEach(() => {
-		loadConnection.mockResolvedValue(Ok({connection: customConnection, integration: integrationFor({integrationId: 'mcp', tools: [search, publish]}), connector: null}));
+		loadConnection.mockResolvedValue(Ok({connection: customConnection, integration: integrationFor({integrationId: 'mcp', tools: [search, publish]})}));
 		listConnectionsWithCredential.mockResolvedValue(Ok([customConnection]));
 		callCustomTool.mockResolvedValue(Ok('3 results'));
 	});

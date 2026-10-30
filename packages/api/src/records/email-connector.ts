@@ -14,8 +14,8 @@ import {imapClientOptions, imapError, smtpError, smtpTransport} from '../connect
 import {log, serializeError} from '../observability/log';
 import {decryptSecret} from '../utils/secret-crypto';
 import {attachmentRecord, attachmentsText, pickAttachment, requireEmailId, type AttachmentFile} from './attachment-text';
-import type {CommandRunner, Connector, DataRecord, ListQuery, RecordPage, RecordTarget, RecordValues} from './connector';
-import {gmailQuery, type EmailSearch} from './email-search';
+import type {CommandRunner, DataRecord, ListQuery, RecordPage, RecordStore, RecordTarget, RecordValues, RunOnly} from './connector';
+import {gmailQuery, type EmailSearch, type MailSearch} from './email-search';
 import {replyCommands, replyHeaders, type MailReply, type ReplyHeaders} from './email-reply';
 
 /**
@@ -345,8 +345,8 @@ async function findEveryone(session: Session, searches: Array<EmailSearch & {inv
  * account only so many connections at once: searches only for people, as the People widget's,
  * as one search for any of them where it can, any others one after the other.
  */
-export function findInboxEmails(target: RecordTarget, searches: EmailSearch[], limit: number, signal?: AbortSignal): Promise<Result<DataRecord[][], ApiError>> {
-	return withFolder(
+const findInboxEmails: MailSearch = (target, searches, limit, signal) =>
+	withFolder(
 		target,
 		INBOX,
 		async (session) => {
@@ -362,7 +362,6 @@ export function findInboxEmails(target: RecordTarget, searches: EmailSearch[], l
 		},
 		signal,
 	);
-}
 
 // Where each folder goes on, in a page token: the folder, its UIDVALIDITY, and the UID listing
 // continues below, as `inbox-7-120,sent-7-33`. A folder left out has nothing more to list.
@@ -694,7 +693,7 @@ async function replyTo(session: Session, id: string, all: boolean): Promise<Resu
  * thread: sent over SMTP, or saved in Drafts. The email's folder is let go of before Drafts is
  * opened. A draft isn't replied to.
  */
-export const replyToMailbox: MailReply = (target, id, reply) =>
+const replyToMailbox: MailReply = (target, id, reply) =>
 	withClient(target, (client, credential) =>
 		Do(async ($) => {
 			const folder = $(folderOf(id));
@@ -712,7 +711,7 @@ export const replyToMailbox: MailReply = (target, id, reply) =>
 		}),
 	);
 
-export const emailConnector: Connector = {
+export const emailConnector = {
 	list: listPage,
 	get: (target, id) => withRecord(target, id, (session) => getMessage(session, id)),
 	create: (target, values) => withFolder(target, DRAFTS, (session) => appendDraft(session, values)),
@@ -741,9 +740,12 @@ export const emailConnector: Connector = {
 	},
 	newCommands: {
 		sendNew: (target, values) => withClient(target, async (client, credential) => (await deliver(client, credential, values)).map(() => null)),
-		// The `attachments` collection's, the only command it has.
-		read: readAttachment,
-		// The `replies` collection's: Send and Save as draft.
-		...replyCommands(replyToMailbox),
 	},
-};
+	findEmails: findInboxEmails,
+	reply: replyToMailbox,
+} satisfies RecordStore;
+
+export const emailAttachmentsConnector = {newCommands: {read: readAttachment}} satisfies RunOnly;
+
+// Send and Save as draft.
+export const emailRepliesConnector = {newCommands: replyCommands(replyToMailbox)} satisfies RunOnly;

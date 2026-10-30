@@ -1,29 +1,26 @@
+import type {ChatEntry, ChatPersona, Persona, ThreadLog} from '@proxy/contracts/harness';
 import {ArrowUpIcon, ChevronDownIcon, MoonIcon, PlusIcon} from 'lucide-react';
 import {type FormEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState} from 'react';
 import {Link, useLoaderData, useNavigate, useRevalidator} from 'react-router';
 import {
-	type ChatEntry,
-	type ChatPersona,
 	createPersona,
 	deletePersona,
 	getThread,
-	type Persona,
 	postMessage,
-	type ThreadLog,
 	updatePersona,
 } from '@/client/harness-client';
 import {AppShell} from '@/components/app-shell';
 import {Head, LiveHead} from '@/components/head';
 import {Markdown} from '@/components/markdown';
 import {PersonaDialog} from '@/components/persona-dialog';
-import {Bubble, BubbleContent} from '@proxy/ui/components/bubble';
+import {Bubble, BubbleContent} from '@/components/chat/bubble';
 import {
 	InputGroup,
 	InputGroupAddon,
 	InputGroupButton,
 	InputGroupTextarea,
 } from '@proxy/ui/components/input-group';
-import {Message, MessageContent} from '@proxy/ui/components/message';
+import {Message, MessageContent} from '@/components/chat/message';
 import {
 	MessageScroller,
 	MessageScrollerButton,
@@ -31,8 +28,8 @@ import {
 	MessageScrollerItem,
 	MessageScrollerProvider,
 	MessageScrollerViewport,
-} from '@proxy/ui/components/message-scroller';
-import {Trace, TraceIcon, TraceLine, TraceTitle} from '@proxy/ui/components/trace';
+} from '@/components/chat/message-scroller';
+import {Trace, TraceIcon, TraceLine, TraceTitle} from '@/components/chat/trace';
 import {preview} from '@proxy/utils/harness';
 import {cn} from '@proxy/ui/lib/utils';
 import {useOrgSlug} from '@/hooks/use-org';

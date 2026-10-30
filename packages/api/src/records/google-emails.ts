@@ -37,8 +37,8 @@ import {
 	type MessagePart,
 } from '../connections/google/gmail-api';
 import {attachmentRecord, attachmentsText, pickAttachment, readableKind, requireEmailId} from './attachment-text';
-import {onlyRun, type CommandRunner, type Connector, type DataRecord, type ListQuery, type NewCommandRunner, type RecordPage, type RecordTarget, type RecordValues} from './connector';
-import {gmailQuery, type EmailSearch} from './email-search';
+import type {CommandRunner, DataRecord, ListQuery, NewCommandRunner, RecordPage, RecordStore, RecordTarget, RecordValues, RunOnly} from './connector';
+import {gmailQuery, type EmailSearch, type MailSearch} from './email-search';
 import {replyCommands, replyHeaders, type MailReply} from './email-reply';
 
 /**
@@ -244,9 +244,8 @@ function findWithToken(token: string, account: string, search: EmailSearch, limi
  * `limit` each, read with their headers alone: a list of a page would read 50. Drafts keep their
  * message ids, as they are only shown.
  */
-export function findGmailEmails(target: RecordTarget, searches: EmailSearch[], limit: number): Promise<Result<DataRecord[][], ApiError>> {
-	return callGoogle(target.connection, async (token) => Result.all(await mapWithLimit(searches, SEARCHES_AT_ONCE, (search) => findWithToken(token, target.connection.account, search, limit))));
-}
+const findGmailEmails: MailSearch = (target, searches, limit) =>
+	callGoogle(target.connection, async (token) => Result.all(await mapWithLimit(searches, SEARCHES_AT_ONCE, (search) => findWithToken(token, target.connection.account, search, limit))));
 
 function readDraft(token: string, account: string, recordId: string, draftId: string): Promise<Result<DataRecord, ApiError>> {
 	return Do(async ($) => {
@@ -407,7 +406,7 @@ function sendNew(target: RecordTarget, values: RecordValues): Promise<Result<nul
  * saved as a draft there: its message id, or its draft's, and the thread Gmail put it in. A draft
  * isn't replied to.
  */
-export const replyToGmail: MailReply = (target, recordId, reply) =>
+const replyToGmail: MailReply = (target, recordId, reply) =>
 	callGoogle(target.connection, (token) =>
 		Do(async ($) => {
 			const ref = $(requireRef(recordId));
@@ -441,7 +440,8 @@ export const replyToGmail: MailReply = (target, recordId, reply) =>
 		}),
 	);
 
-export const gmailRepliesConnector: Connector = {...onlyRun('Replies are only sent or saved as drafts, one at a time'), newCommands: replyCommands(replyToGmail)};
+// The `replies` collection's Send and Save as draft, a reply at a time.
+export const gmailRepliesConnector = {newCommands: replyCommands(replyToGmail)} satisfies RunOnly;
 
 // A message whole, by an email's id: a draft's by its draft id.
 function messageOf(token: string, recordId: string): Promise<Result<GmailMessage, ApiError>> {
@@ -454,7 +454,7 @@ function messageOf(token: string, recordId: string): Promise<Result<GmailMessage
 	});
 }
 
-/** One of an email's attachments, read as text. */
+/** One of an email's attachments, read as text: the `attachments` collection's one command. */
 const readAttachment: NewCommandRunner = (target, values) =>
 	Do(async ($) => {
 		const email = $(requireEmailId(values));
@@ -471,9 +471,9 @@ const readAttachment: NewCommandRunner = (target, values) =>
 		);
 	});
 
-export const gmailAttachmentsConnector: Connector = {...onlyRun('Attachments are only read, one at a time'), newCommands: {read: readAttachment}};
+export const gmailAttachmentsConnector = {newCommands: {read: readAttachment}} satisfies RunOnly;
 
-export const gmailConnector: Connector = {
+export const gmailConnector = {
 	list: listPage,
 	get: (target, recordId) => callGoogle(target.connection, (token) => readRecord(token, target.connection.account, recordId)),
 	create: createDraftRecord,
@@ -489,4 +489,6 @@ export const gmailConnector: Connector = {
 		send,
 	},
 	newCommands: {sendNew},
-};
+	findEmails: findGmailEmails,
+	reply: replyToGmail,
+} satisfies RecordStore;

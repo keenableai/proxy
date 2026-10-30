@@ -12,6 +12,7 @@
       "name": "@proxy/api",
       "version": "0.0.0",
       "dependencies": {
+        "@proxy/contracts": "workspace:*",
         "@proxy/db": "workspace:*",
         "@proxy/integrations": "workspace:*",
         "@proxy/utils": "workspace:*",
@@ -37,6 +38,19 @@
         "typescript": "~6.0.2",
       },
     },
+    "packages/contracts": {
+      "name": "@proxy/contracts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@proxy/integrations": "workspace:*",
+        "@proxy/utils": "workspace:*",
+        "zod": "^4.5.4",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "~6.0.2",
+      },
+    },
     "packages/db": {
       "name": "@proxy/db",
       "version": "0.0.0",
@@ -48,7 +62,6 @@
       },
       "devDependencies": {
         "@prisma/dev": "0.25.2",
-        "@proxy/integrations": "workspace:*",
         "@types/bun": "latest",
         "typescript": "~6.0.2",
       },
@@ -131,7 +144,6 @@
       "dependencies": {
         "@base-ui/react": "^1.8.0",
         "@fontsource-variable/geist": "^5.3.0",
-        "@shadcn/react": "^0.3.1",
         "class-variance-authority": "^0.7.1",
         "cn": "^0.2.6",
         "lucide-react": "^1.43.0",
@@ -168,11 +180,15 @@
       "name": "web",
       "version": "0.0.0",
       "dependencies": {
+        "@base-ui/react": "^1.8.0",
+        "@proxy/contracts": "workspace:*",
         "@proxy/integrations": "workspace:*",
         "@proxy/ui": "workspace:*",
         "@proxy/utils": "workspace:*",
+        "@shadcn/react": "^0.3.1",
         "@tailwindcss/vite": "^4.3.3",
         "chrono-node": "^2.10.3",
+        "class-variance-authority": "^0.7.1",
         "lucide-react": "^1.43.0",
         "react": "^19.2.8",
         "react-dom": "^19.2.8",
@@ -480,6 +496,8 @@
     "@prisma/streams-local": ["@prisma/streams-local@0.1.11", "", { "dependencies": { "ajv": "^8.12.0", "better-result": "^2.7.0", "env-paths": "^3.0.0", "proper-lockfile": "^4.1.2" } }, "sha512-0TcebL559MByKqTJ+SsrFIEg228iw8UCVRFckzgfRSiJqczhs+MuAgWOF9lnOIV/IVqvu+KMnFTH0eDeTQMpUg=="],
 
     "@proxy/api": ["@proxy/api@workspace:packages/api"],
+
+    "@proxy/contracts": ["@proxy/contracts@workspace:packages/contracts"],
 
     "@proxy/db": ["@proxy/db@workspace:packages/db"],
 

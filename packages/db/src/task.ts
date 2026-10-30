@@ -46,16 +46,8 @@ const taskSelect = {
 	lastActiveAt: true,
 } as const;
 
-/**
- * Starts a task for the agent: what it is called and what the person asked for, and the agent's
- * task it is a sub-task of, where it is one. The parent and every task above it are locked while
- * the sub-task is made, so none can be finished in between and leave the sub-task open, and each
- * takes the sub-task's start as the last thing done for it (`lastActiveAt`), so none is left open
- * before it, and one left open is taken up again; `Ok(null)` means the parent, or a task above it,
- * is finished (@proxy/utils/tasks). `ownerUserId` is the member whose own the agent is, who alone
- * sees the task; null for a shared agent's.
- */
-export async function createAgentTask(data: {
+/** A task to make: whose agent's, for whom, under which task, and what it is. */
+export type NewAgentTask = {
 	orgId: string;
 	agentId: string;
 	ownerUserId: string | null;
@@ -65,7 +57,20 @@ export async function createAgentTask(data: {
 	title: string;
 	goal: string;
 	via: AuditVia;
-}): Promise<Result<AgentTaskRow | null, ApiError>> {
+};
+
+/**
+ * Starts a task for the agent: what it is called and what the person asked for, and the agent's
+ * task it is a sub-task of, where it is one. The parent and every task above it are locked while
+ * the sub-task is made, so none can be finished in between and leave the sub-task open, and each
+ * takes the sub-task's start as the last thing done for it (`lastActiveAt`), so none is left open
+ * before it, and one left open is taken up again; `Ok(null)` means the parent, or a task above it,
+ * is finished (@proxy/utils/tasks). `ownerUserId` is the member whose own the agent is, who alone
+ * sees the task; null for a shared agent's.
+ */
+export async function createAgentTask(
+	data: NewAgentTask,
+): Promise<Result<AgentTaskRow | null, ApiError>> {
 	const {orgId, agentId, parentId} = data;
 	if (parentId === null) {
 		return wrapDb(() => {
@@ -212,7 +217,14 @@ export async function finishAgentTask(
 			const finishedAt = new Date();
 			const open = await touchLine(tx, {orgId, agentId, taskId}, finishedAt);
 			if (open) {
-				await tx.agentTask.update({where: {id: taskId}, data: {finishedAt, outcome}});
+				// Selecting something, as every read of a task does: left to itself, Prisma returns every
+				// column of its model, which fails on a column a migration drops while an instance of the
+				// version before still runs (schema.prisma, AgentTask.lastStartedAt).
+				await tx.agentTask.update({
+					where: {id: taskId},
+					data: {finishedAt, outcome},
+					select: {id: true},
+				});
 				const leftOpenBefore = new Date(finishedAt.getTime() - TASK_LEFT_OPEN_AFTER_MS);
 				await finishSubTasks(tx, {orgId, agentId, finishedAt, leftOpenBefore}, [taskId]);
 			}
