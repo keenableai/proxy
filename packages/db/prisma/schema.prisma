@@ -427,8 +427,10 @@ model AgentTask {
   // while one is under way. Set with createdAt, and on it and every task above it when a sub-task
   // starts, a request is made or it is finished.
   lastActiveAt  DateTime @default(now())
-  // What lastActiveAt took over from, read by nothing: kept only for the instances still on the
-  // version before while a deploy replaces them, and dropped by the next migration.
+  // What lastActiveAt took over from, read by nothing. Kept until every instance selects what it
+  // updates of a task (db/task.ts finishAgentTask): the versions before returned every column on an
+  // update, so dropping it while one still ran during a deploy failed its finishing of a task. The
+  // migration after the next deploy drops it.
   lastStartedAt DateTime @default(now())
 
   createdAt DateTime @default(now())
@@ -443,9 +445,10 @@ model AgentTask {
 // What an agent told the makers of Personal Agent Proxy, such as a tool that didn't work as it
 // expected: sent with the MCP server's send_feedback or the agent pages' feedback form, and read
 // by us, never shown in the app. Plain ids, like the activity log, so it stays when the agent or
-// the connection is gone; it goes with the organization.
+// the connection is gone; it goes with the organization. We mark what we have handled from our
+// own admin (resolvedAt, resolution); nothing here writes them.
 model AgentFeedback {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   orgId        String
   agentId      String
   // The agent's AGENT_PROVIDERS id, such as `claude`, kept beside the login it came from.
@@ -457,6 +460,10 @@ model AgentFeedback {
   via          AuditVia
   // The task the agent was on, where it named one.
   taskId       String?
+  // When we marked it handled, null while it is open, and a short note on how, such as the pull
+  // request that fixed it (`#151`) or `upstream`, where we gave one.
+  resolvedAt   DateTime?
+  resolution   String?
 
   createdAt DateTime @default(now())
 
