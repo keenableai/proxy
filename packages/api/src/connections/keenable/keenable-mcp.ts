@@ -5,15 +5,17 @@ import {ApiErr, type ApiError} from '@proxy/utils';
 
 import {parseToolJson} from '../mcp/mcp-client';
 import type {McpServer} from '../mcp/mcp-oauth';
+import {httpPageFailure, pageError, type PageFailure} from '../page-failure';
 
 /**
  * Keenable's MCP server, at the address that takes a sign-in or an API key (its keyless one is
  * `/mcp` beside it), and what its tools answer when asked for JSON: a search's results each a
  * page's address, title, publish date where known and a snippet of its text, and a page read its
- * title and text as Markdown. A page it couldn't read fails the tool, saying why in words: "Error
- * fetching https://…: The page does not exist at this URL.". Results are written out as Exa writes
- * its own, so an agent reads them all the same. Its sign-in is Keenable's Supabase authorization
- * server, as the server's protected resource metadata names it.
+ * title and text as Markdown, cut where it reaches `max_chars` with a note of its own after it. A
+ * page it couldn't read fails the tool, saying why in words: "Error fetching https://…: The page
+ * does not exist at this URL. Check that the URL is correct.". Results are written out as Exa
+ * writes its own, so an agent reads them all the same. Its sign-in is Keenable's Supabase
+ * authorization server, as the server's protected resource metadata names it.
  */
 
 const SERVER = 'https://api.keenable.ai/mcp-oauth';
@@ -31,8 +33,40 @@ export const KEENABLE: McpServer = {
 	tokenUrl: `${AUTH_BASE}/oauth/token`,
 	// Supabase's own default; Keenable asks for nothing more.
 	scope: 'email',
-	toolError: (text) => ApiErr.validationError(`Keenable turned it down: ${text.trim() || 'it didn’t say why'}`),
+	toolError: keenableToolError,
 };
+
+// "Error fetching https://example.com/gone: The page does not exist at this URL. Check that the URL
+// is correct.", for the one page read.
+const FETCH_ERROR = /^Error fetching (\S+): (.+)$/;
+
+// What Keenable's words say of a page, where they name a failure of a known kind: nothing at the
+// address, or the site turning its fetcher away for too many requests. Others, as a site that denied
+// it access without saying how, are passed on in its words.
+function fetchFailure(reason: string): PageFailure | null {
+	if (/does not exist at this URL/i.test(reason)) {
+		return {kind: 'missing'};
+	}
+	if (/rate-limited/i.test(reason)) {
+		return httpPageFailure(429);
+	}
+	return null;
+}
+
+// A page Keenable couldn't read, by what it says of it, with the address; one it couldn't reach,
+// which it says may be worth trying again, out of reach in its words; anything else in its words.
+function keenableToolError(text: string): ApiError {
+	const fetchError = FETCH_ERROR.exec(text.trim());
+	const [url, reason] = [fetchError?.[1], fetchError?.[2]?.trim()];
+	const failure = reason ? fetchFailure(reason) : null;
+	if (url && failure) {
+		return pageError('Keenable', url, failure);
+	}
+	if (url && reason && /may be transient/i.test(reason)) {
+		return ApiErr.providerUnreachable(new Error(`Keenable couldn’t reach ${url}`), `Keenable couldn’t read ${url}: ${reason}`);
+	}
+	return ApiErr.validationError(`Keenable turned it down: ${text.trim() || 'it didn’t say why'}`);
+}
 
 const resultSchema = z.object({
 	url: z.string(),

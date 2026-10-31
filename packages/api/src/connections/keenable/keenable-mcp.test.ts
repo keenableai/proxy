@@ -1,6 +1,8 @@
 import {describe, expect, test} from 'bun:test';
 
-import {formatKeenableResults, parseKeenablePage} from './keenable-mcp';
+import {ApiErr} from '@proxy/utils';
+
+import {formatKeenableResults, KEENABLE, parseKeenablePage} from './keenable-mcp';
 
 describe('formatKeenableResults', () => {
 	test('writes the results out as Exa writes its own, a block a page, its snippet as the highlights', () => {
@@ -39,5 +41,38 @@ describe('parseKeenablePage', () => {
 
 	test('a page without a title keeps all of it as the text', () => {
 		expect(parseKeenablePage(JSON.stringify({url: 'https://example.com/', content: 'Just text\n'})).unwrap()).toEqual({title: '', content: 'Just text'});
+	});
+});
+
+describe('KEENABLE.toolError', () => {
+	const toolError = (text: string) => KEENABLE.toolError?.(text);
+	const page = (url: string, reason: string) => toolError(`Error fetching ${url}: ${reason}`);
+
+	test('a page Keenable found nothing at is not found, with its address and what to do next, as Exa’s is', () => {
+		expect(page('https://example.com/docs/old-guide', 'The page does not exist at this URL. Check that the URL is correct.')).toMatchObject({
+			kind: 'not_found',
+			resource: 'page',
+			id: 'https://example.com/docs/old-guide',
+			message: expect.stringContaining('Keenable found no page at https://example.com/docs/old-guide'),
+		});
+	});
+
+	test('a site that turned its fetcher away for too many requests, or that it couldn’t reach, is out of reach for now', () => {
+		expect(page('https://example.com/busy', 'The target server rate-limited this fetch, please retry shortly.')).toMatchObject({
+			kind: 'provider_unreachable',
+			cause: {kind: 'http', status: 429},
+			message: expect.stringContaining('too many requests'),
+		});
+		expect(page('https://example.com/down', 'The target page could not be reached by the fetcher (upstream fetch failed). This may be transient — retrying is reasonable.')).toMatchObject({
+			kind: 'provider_unreachable',
+			message: 'Keenable couldn’t read https://example.com/down: The target page could not be reached by the fetcher (upstream fetch failed). This may be transient — retrying is reasonable.',
+		});
+	});
+
+	test('any other failure is in Keenable’s words', () => {
+		expect(page('https://example.com/members', 'The target server denied access to this URL')).toEqual(
+			ApiErr.validationError('Keenable turned it down: Error fetching https://example.com/members: The target server denied access to this URL'),
+		);
+		expect(toolError('Invalid arguments')).toEqual(ApiErr.validationError('Keenable turned it down: Invalid arguments'));
 	});
 });
